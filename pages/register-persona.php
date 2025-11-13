@@ -195,6 +195,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         throw new RuntimeException('Ya existe una cuenta con este correo.');
       }
 
+      $stmt = $pdo->prepare('SELECT 1 FROM empresa_cuentas WHERE email = ?');
+      $stmt->execute([$email]);
+      if ($stmt->fetchColumn()) {
+        throw new RuntimeException('Este correo ya esta vinculado a una cuenta de empresa. Usa otro correo personal.');
+      }
+
       $nombre = trim((string)($_POST['nombre'] ?? ''));
       $apellido = trim((string)($_POST['apellido'] ?? ''));
       $telefono = trim((string)($_POST['telefono'] ?? ''));

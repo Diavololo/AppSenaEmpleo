@@ -133,10 +133,23 @@ if (!function_exists('mo_slugify')) {
   function mo_slugify(?string $value): string {
     $value = trim((string)$value);
     if ($value === '') { return ''; }
-    $ascii = iconv('UTF-8', 'ASCII//TRANSLIT', $value);
-    $ascii = strtolower($ascii ?: $value);
+
+    static $replacements = [
+      'á' => 'a', 'Á' => 'a', 'à' => 'a', 'À' => 'a', 'ä' => 'a', 'Ä' => 'a', 'â' => 'a', 'Â' => 'a',
+      'é' => 'e', 'É' => 'e', 'è' => 'e', 'È' => 'e', 'ë' => 'e', 'Ë' => 'e', 'ê' => 'e', 'Ê' => 'e',
+      'í' => 'i', 'Í' => 'i', 'ì' => 'i', 'Ì' => 'i', 'ï' => 'i', 'Ï' => 'i', 'î' => 'i', 'Î' => 'i',
+      'ó' => 'o', 'Ó' => 'o', 'ò' => 'o', 'Ò' => 'o', 'ö' => 'o', 'Ö' => 'o', 'ô' => 'o', 'Ô' => 'o',
+      'ú' => 'u', 'Ú' => 'u', 'ù' => 'u', 'Ù' => 'u', 'ü' => 'u', 'Ü' => 'u', 'û' => 'u', 'Û' => 'u',
+      'ñ' => 'n', 'Ñ' => 'n',
+    ];
+    $value = strtr($value, $replacements);
+
+    $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
+    if ($ascii === false || $ascii === '') { $ascii = $value; }
+
+    $ascii = strtolower((string)$ascii);
     $ascii = preg_replace('/[^a-z0-9]+/', '-', $ascii ?? '');
-    return trim($ascii ?? '', '-');
+    return trim((string)$ascii, '-');
   }
 }
 

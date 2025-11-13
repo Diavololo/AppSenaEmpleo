@@ -39,6 +39,7 @@ if ($vacanteId <= 0 || $candidatoEmail === '' || !in_array($nuevoEstado, $permit
 }
 
 require __DIR__.'/../pages/db.php';
+require_once __DIR__.'/../lib/postulacion_events.php';
 
 if (!($pdo instanceof PDO)) {
   $setFlash('No hay conexión con la base de datos.');
@@ -64,17 +65,20 @@ try {
   }
 
   // Verificar existencia de la postulación
-  $pStmt = $pdo->prepare('SELECT estado FROM postulaciones WHERE vacante_id = ? AND candidato_email = ? LIMIT 1');
+  $pStmt = $pdo->prepare('SELECT id, estado FROM postulaciones WHERE vacante_id = ? AND candidato_email = ? LIMIT 1');
   $pStmt->execute([$vacanteId, $candidatoEmail]);
-  $estadoActual = $pStmt->fetchColumn();
-  if ($estadoActual === false) {
-    $setFlash('No encontramos la postulación del candidato.');
+  $postulacion = $pStmt->fetch(PDO::FETCH_ASSOC);
+  if (!$postulacion) {
+    $setFlash('No encontramos la postulacion del candidato.');
     header('Location: '.$redirectBase.'&vacante_id='.$vacanteId);
     exit;
   }
 
+  $estadoActual = strtolower((string)($postulacion['estado'] ?? ''));
+  $postulacionId = (int)($postulacion['id'] ?? 0);
+
   if ($estadoActual === $nuevoEstado) {
-    $setFlash('La postulación ya está en ese estado.');
+    $setFlash('La postulacion ya esta en ese estado.');
     header('Location: '.$redirectBase.'&vacante_id='.$vacanteId);
     exit;
   }
@@ -92,6 +96,17 @@ try {
   ];
   $label = $labels[$nuevoEstado] ?? ucfirst($nuevoEstado);
   $setFlash('Postulación actualizada a '.$label.'.');
+  pe_log_event(
+    $pdo,
+    $postulacionId,
+    $vacanteId,
+    $candidatoEmail,
+    $nuevoEstado,
+    [
+      'actor' => 'empresa',
+      'nota' => 'La empresa actualizo el estado a '.$label.'.',
+    ]
+  );
 } catch (Throwable $e) {
   error_log('[update_postulacion] '.$e->getMessage());
   $setFlash('No pudimos actualizar la postulación. Intenta de nuevo.');

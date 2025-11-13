@@ -443,7 +443,6 @@ $baseHref = 'index.php';
       <?php else: ?>
         <p class="muted">Aún no tienes entrevistas programadas.</p>
       <?php endif; ?>
-      <a class="btn btn-outline" href="?view=agenda">Ver agenda</a>
     </div>
 
     <div class="card mp-side-card">

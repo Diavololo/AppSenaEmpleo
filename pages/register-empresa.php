@@ -283,6 +283,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         throw new RuntimeException('Ya existe una cuenta de empresa con este correo.');
       }
 
+      $stmt = $pdo->prepare('SELECT 1 FROM candidatos WHERE email = ?');
+      $stmt->execute([$email]);
+      if ($stmt->fetchColumn()) {
+        throw new RuntimeException('El correo ingresado pertenece a un candidato. Usa un correo corporativo distinto.');
+      }
+
       $slug = re_company_slug($nombreComercial !== '' ? $nombreComercial : $razonSocial, $nit);
       $empresaBase = $uploadsRoot.DIRECTORY_SEPARATOR.'empresas';
       re_ensure_directory($empresaBase);

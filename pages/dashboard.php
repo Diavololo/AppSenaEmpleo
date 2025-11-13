@@ -468,7 +468,17 @@ if (!function_exists('dash_slugify')) {
 
     if ($value === '') { return ''; }
 
-    $ascii = iconv('UTF-8', 'ASCII//TRANSLIT', $value);
+    static $replacements = [
+      'á' => 'a', 'Á' => 'a', 'à' => 'a', 'À' => 'a', 'ä' => 'a', 'Ä' => 'a', 'â' => 'a', 'Â' => 'a',
+      'é' => 'e', 'É' => 'e', 'è' => 'e', 'È' => 'e', 'ë' => 'e', 'Ë' => 'e', 'ê' => 'e', 'Ê' => 'e',
+      'í' => 'i', 'Í' => 'i', 'ì' => 'i', 'Ì' => 'i', 'ï' => 'i', 'Ï' => 'i', 'î' => 'i', 'Î' => 'i',
+      'ó' => 'o', 'Ó' => 'o', 'ò' => 'o', 'Ò' => 'o', 'ö' => 'o', 'Ö' => 'o', 'ô' => 'o', 'Ô' => 'o',
+      'ú' => 'u', 'Ú' => 'u', 'ù' => 'u', 'Ù' => 'u', 'ü' => 'u', 'Ü' => 'u', 'û' => 'u', 'Û' => 'u',
+      'ñ' => 'n', 'Ñ' => 'n',
+    ];
+    $value = strtr($value, $replacements);
+
+    $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
 
     if ($ascii === false || $ascii === '') { $ascii = $value; }
 
@@ -1538,7 +1548,12 @@ $levelLabel = $profileData['level'] ?? null;
 
             </div>
 
-            <p class="meta"><strong><?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?></strong> · <?=htmlspecialchars($vacante['meta_line'], ENT_QUOTES, 'UTF-8'); ?></p>
+            <div class="meta" style="display:flex; flex-wrap:wrap; gap:.45rem; align-items:center;">
+              <span><strong><?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?></strong> · <?=htmlspecialchars($vacante['meta_line'], ENT_QUOTES, 'UTF-8'); ?></span>
+              <?php if (!empty($vacante['empresa_id'])): ?>
+                <a class="btn btn-ghost" style="padding:0.2rem 0.9rem; font-size:0.85rem;" href="index.php?view=PerfilEmpresaVistaCandidato&empresa_id=<?= (int)$vacante['empresa_id']; ?>">Ver perfil</a>
+              <?php endif; ?>
+            </div>
 
 
 
@@ -1568,14 +1583,7 @@ $levelLabel = $profileData['level'] ?? null;
 
 
 
-            <p class="desc">
-              <?=htmlspecialchars($vacante['descripcion'], ENT_QUOTES, 'UTF-8'); ?>
-              <?php if (!empty($vacante['empresa_id'])): ?>
-                · <a href="index.php?view=PerfilEmpresaVistaCandidato&empresa_id=<?= (int)$vacante['empresa_id']; ?>" style="color: var(--brand-700); font-weight:600;">
-                  <?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?>
-                </a>
-              <?php endif; ?>
-            </p>
+            <p class="desc"><?=htmlspecialchars($vacante['descripcion'], ENT_QUOTES, 'UTF-8'); ?></p>
 
 
 

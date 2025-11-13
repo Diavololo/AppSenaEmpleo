@@ -9,11 +9,6 @@ if (basename($_SERVER['SCRIPT_NAME']) !== 'index.php') {
 
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
 $user = $_SESSION['user'] ?? null;
-if (!$user || ($user['type'] ?? '') !== 'persona') {
-  // Vista pensada para candidatos
-  header('Location: index.php?view=login');
-  exit;
-}
 
 require __DIR__.'/db.php';
 
@@ -33,6 +28,14 @@ function pec_format_money(?int $min, ?int $max, string $currency): string {
   if ($min !== null && $max !== null) { return $fmt($min).' - '.$fmt($max); }
   if ($min !== null) { return 'Desde '.$fmt($min); }
   return 'Hasta '.$fmt($max);
+}
+function pec_truncate(?string $text, int $limit = 180): string {
+  $text = trim((string)$text);
+  if ($text === '' || mb_strlen($text, 'UTF-8') <= $limit) {
+    return $text;
+  }
+  $slice = mb_substr($text, 0, $limit - 1, 'UTF-8');
+  return rtrim($slice).'…';
 }
 
 $empresaId = isset($_GET['empresa_id']) ? (int)$_GET['empresa_id'] : 0;
@@ -67,10 +70,10 @@ $error = null;
 
 if ($empresaId > 0 && ($pdo instanceof PDO)) {
   try {
-    $stmt = $pdo->prepare('SELECT e.id, e.razon_social, e.nombre_comercial, e.sitio_web, e.ciudad, e.logo_url, e.portada_url,
+    $stmt = $pdo->prepare('SELECT e.id, e.nit, e.razon_social, e.nombre_comercial, e.sitio_web, e.ciudad, e.direccion, e.descripcion, e.telefono, e.email_contacto, e.logo_url, e.portada_url,
                                    e.linkedin_url, e.facebook_url, e.instagram_url,
                                    s.nombre AS sector_nombre, t.nombre AS tamano_nombre, e.estado, e.verificada,
-                                   d.descripcion, d.mision, d.valores, d.areas_contratacion, d.tecnologias,
+                                   d.mision, d.valores, d.areas_contratacion, d.tecnologias,
                                    d.pais, d.tipo_entidad, d.anio_fundacion, d.modalidad_trabajo,
                                    d.link_x, d.link_youtube, d.link_glassdoor
                               FROM empresas e
@@ -94,7 +97,7 @@ if ($empresaId > 0 && ($pdo instanceof PDO)) {
     $empresaFicha['valores'] = pec_split_list($empresa['valores'] ?? null);
     $empresaFicha['areas'] = pec_split_list($empresa['areas_contratacion'] ?? null);
     $empresaFicha['tecnologias'] = pec_split_list($empresa['tecnologias'] ?? null);
-    $empresaFicha['logo_url'] = $empresa['logo_url'] ?? null;
+      $empresaFicha['logo_url'] = $empresa['logo_url'] ?? null;
     $empresaFicha['portada_url'] = $empresa['portada_url'] ?? null;
     $empresaFicha['sitio_web'] = $empresa['sitio_web'] ?? null;
     $empresaFicha['verificada'] = !empty($empresa['verificada']);
@@ -135,6 +138,22 @@ if ($empresaId > 0 && ($pdo instanceof PDO)) {
 ?>
 
 <?php
+if ($error) {
+?>
+  <section class="section">
+    <div class="container">
+      <div class="card co-alert co-alert--error" style="display:flex; flex-direction:column; gap:.5rem;">
+        <strong><?=pec_e($error); ?></strong>
+        <a class="btn btn-secondary" href="index.php?view=dashboard">Volver al dashboard</a>
+      </div>
+    </div>
+  </section>
+<?php
+  return;
+}
+?>
+
+<?php
   $portada = $empresaFicha['portada_url'] ?: 'assets/Empresa.png';
   $logo = $empresaFicha['logo_url'] ?: null;
   $nombreComercial = trim((string)($empresa['nombre_comercial'] ?? ''));
@@ -142,159 +161,231 @@ if ($empresaId > 0 && ($pdo instanceof PDO)) {
     $nombreComercial = trim((string)($empresa['razon_social'] ?? ''));
   }
   $nombre = $nombreComercial !== '' ? $nombreComercial : 'Empresa';
+
+  $tagline = pec_truncate($empresa['descripcion'] ?? '');
+  $heroChips = [];
+  if (!empty($empresaFicha['sector'])) { $heroChips[] = 'Industria: '.$empresaFicha['sector']; }
+  if (!empty($empresaFicha['tamano'])) { $heroChips[] = 'Tamaño: '.$empresaFicha['tamano']; }
+  if (!empty($empresaFicha['anio_fundacion'])) { $heroChips[] = 'Fundada en '.(string)$empresaFicha['anio_fundacion']; }
+  if (!empty($empresaFicha['modalidad'])) { $heroChips[] = 'Modalidad: '.$empresaFicha['modalidad']; }
+  if (!empty($empresaFicha['ciudad']) || !empty($empresaFicha['pais'])) {
+    $heroChips[] = 'Sede: '.trim(($empresaFicha['ciudad'] ?? '').(!empty($empresaFicha['pais']) ? ', '.$empresaFicha['pais'] : ''));
+  }
+
+  $badges = [];
+  if (!empty($empresa['estado'])) { $badges[] = ['label' => ucfirst((string)$empresa['estado']), 'class' => 'chip', 'style' => '']; }
+  if (!empty($empresaFicha['verificada'])) { $badges[] = ['label' => 'Verificada', 'class' => 'chip', 'style' => 'background:#e9f7ef;color:#1f513f;font-weight:600;']; }
+
+  $ctaEmail = trim((string)($empresa['email_contacto'] ?? ''));
+  $ctaPhone = trim((string)($empresa['telefono'] ?? ''));
+  $ctaSite = trim((string)($empresaFicha['sitio_web'] ?? ''));
+  $ctaMailHref = $ctaEmail !== '' ? 'mailto:'.$ctaEmail.'?subject='.rawurlencode('Interés en '.$nombre) : null;
+
+  $kpiCards = [
+    ['label' => 'Vacantes activas', 'value' => $kpis['activas']],
+    ['label' => 'Tiempo de respuesta', 'value' => $kpis['respuesta'] ?? '—'],
+    ['label' => 'Proceso promedio', 'value' => $kpis['proceso'] ?? '—'],
+  ];
+
+  $valoresTexto = $empresaFicha['valores'] ? implode(' · ', $empresaFicha['valores']) : null;
+  $areasTexto = $empresaFicha['areas'] ? implode(' · ', $empresaFicha['areas']) : null;
+  $tecnologias = $empresaFicha['tecnologias'] ?: [];
+  $beneficiosLista = [];
+  $vacantesDestacadas = $vacantesActivas ? array_slice($vacantesActivas, 0, 2) : [];
+  $mostrarTodasLasVacantes = count($vacantesActivas) > count($vacantesDestacadas);
+
+  $empresaFicha['anio_fundacion'] = $empresaFicha['anio_fundacion'] !== null ? (string)$empresaFicha['anio_fundacion'] : null;
 ?>
 
 <section class="section">
-  <div class="container">
+  <div class="container" style="display:flex; flex-direction:column; gap:1.5rem;">
     <div class="card" style="padding:0; overflow:hidden;">
-      <div style="height:180px; background:#eef3f7;">
+      <div style="height:220px; background:#eef3f7;">
         <img src="<?=pec_e($portada); ?>" alt="Portada de <?=pec_e($nombre); ?>" style="width:100%; height:100%; object-fit:cover; display:block;" />
       </div>
-      <div style="padding:1rem; display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
-        <div style="flex:1; display:flex; flex-direction:column; gap:.75rem;">
-          <div style="display:flex; align-items:center; gap:.75rem;">
+      <div style="padding:1.5rem; display:flex; flex-wrap:wrap; gap:1.5rem; justify-content:space-between; align-items:flex-start;">
+        <div style="flex:1 1 320px; display:flex; flex-direction:column; gap:.9rem;">
+          <div style="display:flex; gap:1rem; align-items:center;">
             <?php if ($logo): ?>
-              <img src="<?=pec_e($logo); ?>" alt="Logo <?=pec_e($nombre); ?>" style="width:72px; height:72px; border-radius:16px; object-fit:cover; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,0.08);" />
+              <img src="<?=pec_e($logo); ?>" alt="Logo <?=pec_e($nombre); ?>" style="width:80px; height:80px; border-radius:18px; object-fit:cover; background:#fff; box-shadow:0 0 0 1px rgba(0,0,0,0.08);" />
+            <?php else: ?>
+              <div style="width:80px; height:80px; border-radius:18px; background:#f3f5f7; display:flex; align-items:center; justify-content:center; font-weight:600; color:#96a0aa; text-transform:uppercase;">
+                <?=pec_e(mb_substr($nombre, 0, 2, 'UTF-8')); ?>
+              </div>
             <?php endif; ?>
-            <div>
-              <h2 class="m-0"><?=pec_e($nombre); ?></h2>
-              <?php if (!empty($empresa['estado'] ?? null)): ?><p class="muted m-0"><?=pec_e((string)$empresa['estado']); ?></p><?php endif; ?>
+            <div style="display:flex; flex-direction:column; gap:.35rem;">
+              <div style="display:flex; flex-wrap:wrap; gap:.5rem; align-items:center;">
+                <h1 class="m-0"><?=pec_e($nombre); ?></h1>
+                <?php foreach ($badges as $badge): ?>
+                  <span class="<?=pec_e($badge['class']); ?>" style="font-size:.85rem;<?=pec_e($badge['style'] ?? ''); ?>"><?=pec_e($badge['label']); ?></span>
+                <?php endforeach; ?>
+              </div>
+              <?php if ($tagline !== ''): ?><p class="muted m-0"><?=pec_e($tagline); ?></p><?php endif; ?>
             </div>
           </div>
-          <p class="muted m-0"><?=pec_e($empresaFicha['descripcion'] ?? ''); ?></p>
-          <div style="display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.25rem;">
-            <?php if (!empty($empresaFicha['sector'])): ?><span class="chip">Industria: <?=pec_e($empresaFicha['sector']); ?></span><?php endif; ?>
-            <?php if (!empty($empresaFicha['tamano'])): ?><span class="chip">Tamaño: <?=pec_e($empresaFicha['tamano']); ?></span><?php endif; ?>
-            <?php if (!empty($empresaFicha['anio_fundacion'])): ?><span class="chip">Fundada en <?=pec_e((string)$empresaFicha['anio_fundacion']); ?></span><?php endif; ?>
-            <?php if (!empty($empresaFicha['modalidad'])): ?><span class="chip">Modalidad: <?=pec_e($empresaFicha['modalidad']); ?></span><?php endif; ?>
-            <?php if (!empty($empresaFicha['ciudad'])): ?><span class="chip muted">Sede: <?=pec_e($empresaFicha['ciudad']); ?><?= !empty($empresaFicha['pais']) ? ', '.pec_e($empresaFicha['pais']) : ''; ?></span><?php endif; ?>
-            <?php if ($empresaFicha['verificada']): ?><span class="chip">Cuenta verificada</span><?php endif; ?>
-            <?php if (!empty($empresa['estado'] ?? null)): ?><span class="chip muted">Estado: <?=pec_e((string)$empresa['estado']); ?></span><?php endif; ?>
-          </div>
-        </div>
-        <div class="actions" style="gap:.5rem; display:flex; flex-direction:column; align-items:flex-end;">
-          <?php if (!empty($empresaFicha['sitio_web'])): ?>
-            <a class="btn btn-secondary" href="<?=pec_e($empresaFicha['sitio_web']); ?>" target="_blank" rel="noopener">Visitar sitio</a>
+          <?php if ($heroChips): ?>
+            <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+              <?php foreach ($heroChips as $chip): ?>
+                <span class="chip"><?=pec_e($chip); ?></span>
+              <?php endforeach; ?>
+            </div>
           <?php endif; ?>
-          <a class="btn btn-primary" href="index.php?view=OfertasEmpresaVistaCandidato&empresa_id=<?=pec_e((string)$empresaId); ?>">Ver ofertas</a>
+        </div>
+        <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center;">
+          <?php if ($ctaMailHref): ?>
+            <a class="btn btn-primary" href="<?=$ctaMailHref; ?>">Contactar</a>
+          <?php endif; ?>
+          <?php if ($ctaSite !== ''): ?>
+            <a class="btn btn-secondary" href="<?=pec_e($ctaSite); ?>" target="_blank" rel="noopener">Visitar sitio</a>
+          <?php endif; ?>
+          <a class="btn btn-outline" href="index.php?view=OfertasEmpresaVistaCandidato&empresa_id=<?=pec_e((string)$empresaId); ?>">Ver ofertas</a>
         </div>
       </div>
     </div>
 
-    <div class="kpis" style="margin-top:1rem; display:flex; gap: var(--sp-4); flex-wrap:wrap;">
-      <div class="card kpi" style="flex:1 1 220px;">
-        <span class="kpi-label">Vacantes activas</span>
-        <span class="kpi-value"><?=pec_e((string)$kpis['activas']); ?></span>
-      </div>
-      <div class="card kpi" style="flex:1 1 220px;">
-        <span class="kpi-label">Tiempo de respuesta</span>
-        <span class="kpi-value"><?=pec_e($kpis['respuesta'] ?? '—'); ?></span>
-      </div>
-      <div class="card kpi" style="flex:1 1 220px;">
-        <span class="kpi-label">Proceso promedio</span>
-        <span class="kpi-value"><?=pec_e($kpis['proceso'] ?? '—'); ?></span>
-      </div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:1rem;">
+      <?php foreach ($kpiCards as $kpi): ?>
+        <div class="card" style="text-align:center; padding:1rem;">
+          <span class="muted" style="display:block; font-size:.9rem;"><?=pec_e($kpi['label']); ?></span>
+          <span style="font-size:2rem; font-weight:600; color:#1f513f;"><?=pec_e((string)$kpi['value']); ?></span>
+        </div>
+      <?php endforeach; ?>
     </div>
 
-    <div class="layout" style="margin-top:1rem; display:flex; gap: var(--sp-4); align-items:flex-start; flex-wrap:wrap;">
-      <main style="flex:1 1 420px;">
-        <div class="card">
+    <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:flex-start;">
+      <div style="flex:1 1 520px; display:grid; gap:1rem;">
+        <div class="card" style="display:grid; gap:.75rem;">
           <h3>Sobre la empresa</h3>
-          <p class="muted"><?=pec_e($empresaFicha['descripcion'] ?? ''); ?></p>
-          <div style="display:flex; gap:.8rem; flex-wrap:wrap;">
+          <p class="muted m-0"><?=pec_e($empresa['descripcion'] ?? 'Esta empresa aún no ha añadido una descripción.'); ?></p>
+          <div style="display:flex; flex-wrap:wrap; gap:1rem;">
             <?php if (!empty($empresaFicha['mision'])): ?>
-              <div style="flex:1 1 240px;">
+              <div style="flex:1 1 220px;">
                 <strong>Propósito</strong>
                 <p class="muted m-0"><?=pec_e($empresaFicha['mision']); ?></p>
               </div>
             <?php endif; ?>
-            <?php if ($empresaFicha['valores']): ?>
-              <div style="flex:1 1 240px;">
+            <?php if ($valoresTexto): ?>
+              <div style="flex:1 1 220px;">
                 <strong>Valores</strong>
-                <p class="muted m-0"><?=pec_e(implode(' · ', $empresaFicha['valores'])); ?></p>
+                <p class="muted m-0"><?=pec_e($valoresTexto); ?></p>
               </div>
             <?php endif; ?>
-            <?php if ($empresaFicha['areas']): ?>
-              <div style="flex:1 1 240px;">
-                <strong>Áreas</strong>
-                <p class="muted m-0"><?=pec_e(implode(' · ', $empresaFicha['areas'])); ?></p>
+            <?php if ($areasTexto): ?>
+              <div style="flex:1 1 220px;">
+                <strong>Áreas de contratación</strong>
+                <p class="muted m-0"><?=pec_e($areasTexto); ?></p>
               </div>
             <?php endif; ?>
           </div>
         </div>
 
-        <div class="card">
+        <div class="card" style="display:grid; gap:.75rem;">
           <h3>Tecnologías y herramientas</h3>
-          <p class="muted">Información que ayuda al matching de candidatos.</p>
-          <?php if ($empresaFicha['tecnologias']): ?>
-            <div style="display:flex; flex-wrap:wrap; gap:.5rem;">
-              <?php foreach ($empresaFicha['tecnologias'] as $tech): ?>
+          <p class="muted m-0">Esta información ayuda a mejorar el match de candidatos.</p>
+          <?php if ($tecnologias): ?>
+            <div style="display:flex; flex-wrap:wrap; gap:.4rem;">
+              <?php foreach ($tecnologias as $tech): ?>
                 <span class="chip"><?=pec_e($tech); ?></span>
               <?php endforeach; ?>
             </div>
           <?php else: ?>
-            <p class="muted m-0">No hay tecnologías registradas.</p>
+            <p class="muted m-0">La empresa aún no ha registrado tecnologías.</p>
           <?php endif; ?>
         </div>
 
-        <div class="card">
-          <h3>Vacantes activas</h3>
-          <?php if ($vacantesActivas): ?>
-            <?php foreach ($vacantesActivas as $v): ?>
-              <article class="card co-card" style="margin-top:.6rem;">
-                <div class="co-card-head" style="display:flex; justify-content:space-between; align-items:center;">
-                  <div>
-                    <h3 class="mb-2"><?=pec_e($v['titulo'] ?? 'Oferta'); ?></h3>
-                    <?php $lead = array_filter([$v['modalidad'] ?? null, $v['contrato'] ?? null, $v['ciudad'] ?? null]); ?>
-                    <?php if ($lead): ?><p class="muted"><?=pec_e(implode(' · ', $lead)); ?></p><?php endif; ?>
+        <div class="card" style="display:grid; gap:.75rem;">
+          <h3>Beneficios</h3>
+          <?php if ($beneficiosLista): ?>
+            <ul style="margin:0; padding-left:1.2rem; display:grid; gap:.25rem;">
+              <?php foreach ($beneficiosLista as $beneficio): ?>
+                <li><?=pec_e($beneficio); ?></li>
+              <?php endforeach; ?>
+            </ul>
+          <?php else: ?>
+            <p class="muted m-0">La empresa no ha publicado beneficios aún.</p>
+          <?php endif; ?>
+        </div>
+
+        <div class="card" style="display:grid; gap:.75rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.5rem;">
+            <h3 class="m-0">Vacantes destacadas</h3>
+            <?php if ($mostrarTodasLasVacantes): ?>
+              <a class="btn btn-outline" href="index.php?view=OfertasEmpresaVistaCandidato&empresa_id=<?=pec_e((string)$empresaId); ?>">Ver todas las ofertas</a>
+            <?php endif; ?>
+          </div>
+          <?php if ($vacantesDestacadas): ?>
+            <div style="display:grid; gap:1rem;">
+              <?php foreach ($vacantesDestacadas as $v): ?>
+                <article class="card" style="border:1px solid #e3e8ef; padding:1rem; display:grid; gap:.75rem;">
+                  <div style="display:flex; justify-content:space-between; gap:.5rem; align-items:flex-start; flex-wrap:wrap;">
+                    <div>
+                      <h4 class="m-0"><?=pec_e($v['titulo'] ?? 'Oferta laboral'); ?></h4>
+                      <?php $lead = array_filter([$v['modalidad'] ?? null, $v['contrato'] ?? null, $v['ciudad'] ?? null]); ?>
+                      <?php if ($lead): ?><p class="muted m-0"><?=pec_e(implode(' · ', $lead)); ?></p><?php endif; ?>
+                    </div>
+                    <?php if (!empty($v['estado'])): ?>
+                      <span class="badge"><?=pec_e(ucfirst((string)$v['estado'])); ?></span>
+                    <?php endif; ?>
                   </div>
-                </div>
-                <?php if (!empty($v['descripcion'])): ?>
-                  <p class="muted"><?=pec_e($v['descripcion']); ?></p>
-                <?php endif; ?>
-                <div class="co-meta-row" style="display:flex; gap:1rem;">
-                  <div>
-                    <span class="co-meta-label">Salario</span>
-                    <span class="co-meta-value"><?=pec_e(pec_format_money(isset($v['salario_min'])?(int)$v['salario_min']:null, isset($v['salario_max'])?(int)$v['salario_max']:null, (string)($v['moneda'] ?? 'COP'))); ?></span>
+                  <?php if (!empty($v['descripcion'])): ?>
+                    <p class="muted m-0"><?=pec_e($v['descripcion']); ?></p>
+                  <?php endif; ?>
+                  <div style="display:flex; gap:1.5rem; flex-wrap:wrap;">
+                    <div>
+                      <span class="muted" style="font-size:.85rem;">Salario</span>
+                      <p class="m-0"><strong><?=pec_e(pec_format_money(isset($v['salario_min'])?(int)$v['salario_min']:null, isset($v['salario_max'])?(int)$v['salario_max']:null, (string)($v['moneda'] ?? 'COP'))); ?></strong></p>
+                    </div>
                   </div>
-                </div>
-                <div class="co-actions" style="display:flex; gap:.6rem;">
-                  <a class="btn btn-outline" href="index.php?view=oferta_detalle&id=<?=pec_e((string)$v['id']); ?>">Ver detalle</a>
-                  <a class="btn btn-brand" href="index.php?view=oferta_detalle&id=<?=pec_e((string)$v['id']); ?>&apply=1">Postular</a>
-                </div>
-              </article>
-            <?php endforeach; ?>
-            <div class="actions" style="margin-top:.6rem;">
-              <a class="btn btn-secondary" href="index.php?view=OfertasEmpresaVistaCandidato&empresa_id=<?=pec_e((string)$empresaId); ?>">Ver todas las ofertas</a>
+                  <div style="display:flex; gap:.6rem; flex-wrap:wrap;">
+                    <a class="btn btn-outline" href="index.php?view=oferta_detalle&id=<?=pec_e((string)$v['id']); ?>">Ver detalle</a>
+                    <a class="btn btn-brand" href="index.php?view=oferta_detalle&id=<?=pec_e((string)$v['id']); ?>&apply=1">Postular</a>
+                  </div>
+                </article>
+              <?php endforeach; ?>
             </div>
           <?php else: ?>
-            <p class="muted m-0">Esta empresa no tiene vacantes activas en este momento.</p>
+            <p class="muted m-0">Esta empresa aún no tiene vacantes publicadas.</p>
           <?php endif; ?>
         </div>
-      </main>
+      </div>
 
-      <aside style="flex:0 0 320px; display:flex; flex-direction:column; gap: var(--sp-4);">
-        <div class="card">
+      <aside style="flex:0 0 320px; display:grid; gap:1rem;">
+        <div class="card" style="display:grid; gap:.4rem;">
           <h3>Ficha de empresa</h3>
-          <ul role="list" style="list-style:none; padding:0; margin:0; display:grid; gap:.4rem;">
-            <li><strong>Razón social:</strong> <?=pec_e($empresa['razon_social'] ?? ''); ?></li>
-            <li><strong>Sitio:</strong> <?= !empty($empresaFicha['sitio_web']) ? '<a href="'.pec_e((string)$empresaFicha['sitio_web']).'" target="_blank" rel="noopener">'.pec_e((string)$empresaFicha['sitio_web']).'</a>' : '—'; ?></li>
-            <li><strong>Ubicación:</strong> <?=pec_e($empresaFicha['ciudad'] ?? ''); ?><?= !empty($empresaFicha['pais']) ? ', '.pec_e($empresaFicha['pais']) : ''; ?></li>
-            <li><strong>Sector:</strong> <?=pec_e($empresaFicha['sector'] ?? ''); ?></li>
-            <li><strong>Tamaño:</strong> <?=pec_e($empresaFicha['tamano'] ?? ''); ?></li>
-            <li><strong>Verificada:</strong> <?= $empresaFicha['verificada'] ? 'Sí' : 'No'; ?></li>
+          <ul style="list-style:none; padding:0; margin:0; display:grid; gap:.35rem;">
+            <li><strong>Razón social:</strong> <?=pec_e($empresa['razon_social'] ?? $nombre); ?></li>
+            <li><strong>NIT:</strong> <?=pec_e($empresa['nit'] ?? '—'); ?></li>
+            <li><strong>Industria:</strong> <?=pec_e($empresaFicha['sector'] ?? '—'); ?></li>
+            <li><strong>Tamaño:</strong> <?=pec_e($empresaFicha['tamano'] ?? '—'); ?></li>
+            <li><strong>Fundación:</strong> <?=pec_e($empresaFicha['anio_fundacion'] ?? '—'); ?></li>
+            <li><strong>Modalidad:</strong> <?=pec_e($empresaFicha['modalidad'] ?? '—'); ?></li>
+            <li><strong>Ubicación:</strong> <?=pec_e(trim(($empresaFicha['ciudad'] ?? '').(!empty($empresaFicha['pais']) ? ', '.$empresaFicha['pais'] : '')) ?: '—'); ?></li>
+            <li><strong>Dirección:</strong> <?=pec_e($empresa['direccion'] ?? '—'); ?></li>
           </ul>
         </div>
-        <div class="card">
-          <h3>Presencia digital</h3>
-          <ul role="list" style="list-style:none; padding:0; margin:0; display:grid; gap:.4rem;">
-            <?php if (!empty($empresaFicha['sitio_web'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['sitio_web']); ?>">Sitio web</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['linkedin'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['linkedin']); ?>">LinkedIn</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['facebook'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['facebook']); ?>">Facebook</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['instagram'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['instagram']); ?>">Instagram</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['x'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['x']); ?>">X / Twitter</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['youtube'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['youtube']); ?>">YouTube</a></li><?php endif; ?>
-            <?php if (!empty($empresaFicha['glassdoor'])): ?><li><a class="link" target="_blank" rel="noopener" href="<?=pec_e($empresaFicha['glassdoor']); ?>">Glassdoor</a></li><?php endif; ?>
+
+        <div class="card" style="display:grid; gap:.5rem;">
+          <h3>Contacto</h3>
+          <ul style="list-style:none; padding:0; margin:0; display:grid; gap:.35rem;">
+            <li><strong>Correo:</strong> <?= $ctaEmail !== '' ? '<a href="mailto:'.pec_e($ctaEmail).'">'.pec_e($ctaEmail).'</a>' : '—'; ?></li>
+            <li><strong>Teléfono:</strong> <?=pec_e($ctaPhone !== '' ? $ctaPhone : '—'); ?></li>
+            <li><strong>Cuenta verificada:</strong> <?= $empresaFicha['verificada'] ? 'Sí' : 'No'; ?></li>
+          </ul>
+          <?php if ($ctaMailHref): ?>
+            <a class="btn btn-secondary" href="<?=$ctaMailHref; ?>">Enviar mensaje</a>
+          <?php endif; ?>
+        </div>
+
+        <div class="card" style="display:grid; gap:.5rem;">
+          <h3>Redes e enlaces</h3>
+          <ul style="list-style:none; padding:0; margin:0; display:grid; gap:.35rem;">
+            <?php if ($ctaSite !== ''): ?><li><a class="link" href="<?=pec_e($ctaSite); ?>" target="_blank" rel="noopener">Sitio web</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['linkedin'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['linkedin']); ?>" target="_blank" rel="noopener">LinkedIn</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['facebook'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['facebook']); ?>" target="_blank" rel="noopener">Facebook</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['instagram'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['instagram']); ?>" target="_blank" rel="noopener">Instagram</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['x'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['x']); ?>" target="_blank" rel="noopener">X / Twitter</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['youtube'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['youtube']); ?>" target="_blank" rel="noopener">YouTube</a></li><?php endif; ?>
+            <?php if (!empty($empresaFicha['glassdoor'])): ?><li><a class="link" href="<?=pec_e($empresaFicha['glassdoor']); ?>" target="_blank" rel="noopener">Glassdoor</a></li><?php endif; ?>
           </ul>
         </div>
       </aside>

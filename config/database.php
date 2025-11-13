@@ -9,7 +9,7 @@
 return [
   'host' => '127.0.0.1',
   'port' => 3306,
-  'name' => 'sena_bolsa_empleo',
+  'name' => 'mydb',
   'user' => 'root',
-  'pass' => 'postgres',
+  'pass' => '1234',
 ];

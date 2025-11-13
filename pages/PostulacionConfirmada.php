@@ -2,6 +2,7 @@
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
 require __DIR__.'/db.php';
+require_once __DIR__.'/../lib/postulacion_events.php';
 // Utilidad de escape
 if (!function_exists('e')) { function e(?string $v): string { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8'); } }
 if (!function_exists('pc_human_diff')) {
@@ -18,6 +19,38 @@ if (!function_exists('pc_human_diff')) {
     }
     if ($diff->days === 1) { return 'Hace 1 día'; }
     return 'Hace '.$diff->days.' días';
+  }
+}
+
+if (!function_exists('pc_state_label')) {
+  function pc_state_label(string $state): string {
+    $map = [
+      'recibida' => 'Recibida',
+      'leida' => 'Leida',
+      'preseleccion' => 'Preseleccion',
+      'entrevista' => 'Entrevista',
+      'oferta' => 'Oferta',
+      'contratado' => 'Contratado',
+      'no_seleccionado' => 'No seleccionado',
+    ];
+    $state = strtolower($state);
+    return $map[$state] ?? ucfirst($state);
+  }
+}
+
+if (!function_exists('pc_event_note')) {
+  function pc_event_note(string $state, string $actor, ?string $customNote): string {
+    if ($customNote !== null && trim($customNote) !== '') {
+      return trim($customNote);
+    }
+    $label = pc_state_label($state);
+    $actor = strtolower($actor);
+    $actorLabel = match ($actor) {
+      'empresa' => 'La empresa',
+      'candidato' => 'Tu postulacion',
+      default => 'Sistema',
+    };
+    return $actorLabel.' actualizo el estado a '.$label.'.';
   }
 }
 
@@ -55,6 +88,7 @@ $progreso = 15; // porcentaje de barra
 $pasoActual = 1; // 1=Postulación, 2=Preselección, 3=Entrevista, 4=Oferta/Cierre
 $estadoPostulacion = 'recibida';
 $aplicadaAt = null;
+$timelineEvents = [];
 
 if ($vacanteId && ($pdo instanceof PDO)) {
   try {
@@ -106,6 +140,7 @@ if ($vacanteId && ($pdo instanceof PDO)) {
       ];
       $progreso = $mapProg[$pasoActual] ?? 15;
       if ($estadoPostulacion === 'no_seleccionado') { $progreso = 100; }
+      $timelineEvents = pe_fetch_events($pdo, $vacanteId, $email, 8);
     }
   } catch (Throwable $e) {
     error_log('[PostulacionConfirmada] '.$e->getMessage());
@@ -223,6 +258,27 @@ if ($vacanteId && ($pdo instanceof PDO)) {
           <p class="muted m-0">Te notificaremos el resultado final.</p>
         </li>
       </ol>
+
+      <div class="pc-updates" style="display:flex;flex-direction:column;gap:12px;">
+        <h3 class="text-sm m-0">Actualizaciones</h3>
+        <?php if ($timelineEvents): ?>
+          <ul class="pc-timeline" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px;">
+            <?php foreach ($timelineEvents as $event): ?>
+              <?php $eventState = strtolower((string)($event['estado'] ?? 'recibida')); ?>
+              <li style="position:relative;padding-left:16px;border-left:2px solid #e4e9ed;">
+                <span style="position:absolute;width:10px;height:10px;border-radius:999px;background:#2db24a;left:-6px;top:8px;"></span>
+                <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                  <span class="badge"><?= e(pc_state_label($eventState)); ?></span>
+                  <span class="muted"><?= e(pc_human_diff($event['created_at'] ?? null)); ?></span>
+                </div>
+                <p class="muted m-0"><?= e(pc_event_note($eventState, (string)($event['actor'] ?? 'sistema'), $event['nota'] ?? null)); ?></p>
+              </li>
+            <?php endforeach; ?>
+          </ul>
+        <?php else: ?>
+          <p class="muted m-0">Te avisaremos aqui cuando la empresa avance tu postulacion.</p>
+        <?php endif; ?>
+      </div>
 
       <div class="card p-16" style="background:#f7faf7">
 <p class="muted m-0">Consejo: Mantén <a href="<?= $base ?>index.php?view=perfil_usuario" class="link">tu perfil actualizado</a> y añade certificaciones para mejorar el match.</p>

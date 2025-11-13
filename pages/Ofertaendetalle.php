@@ -10,6 +10,7 @@ if ($is_direct) {
 }
 
 require __DIR__.'/db.php';
+require_once __DIR__.'/../lib/postulacion_events.php';
 
 $vacanteId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $baseHref = $is_direct ? '../index.php' : 'index.php';
@@ -218,6 +219,18 @@ if ($applyRequested && $oferta && ($pdo instanceof PDO)) {
     try {
       $insert = $pdo->prepare('INSERT INTO postulaciones (vacante_id, candidato_email) VALUES (?, ?)');
       $insert->execute([$vacanteId, $candidateEmail]);
+      $postulacionId = (int)$pdo->lastInsertId();
+      pe_log_event(
+        $pdo,
+        $postulacionId,
+        $vacanteId,
+        $candidateEmail,
+        'recibida',
+        [
+          'actor' => 'candidato',
+          'nota' => 'Postulacion enviada desde el portal.',
+        ]
+      );
       $_SESSION['flash_oferta'] = [
         'type' => 'success',
         'text' => '¡Listo! Te postulaste a '.($oferta['titulo'] ?? 'la oferta').'.',
@@ -278,15 +291,6 @@ $messageStyles = [
       </div>
     <?php endif; ?>
 
-    <?php if ($isCandidate && $candidateEmail && $postulado): ?>
-      <?php
-        // Incluir la ventana de Postulación confirmada dentro del detalle si ya está postulado
-        $prevVacIdAlias = $_GET['vacante_id'] ?? null;
-        $_GET['vacante_id'] = $vacanteId;
-        require __DIR__.'/PostulacionConfirmada.php';
-        if ($prevVacIdAlias === null) { unset($_GET['vacante_id']); } else { $_GET['vacante_id'] = $prevVacIdAlias; }
-      ?>
-    <?php else: ?>
     <div class="card" style="display:grid; gap: var(--sp-3);">
       <div style="display:flex; justify-content:space-between; align-items:start; gap: var(--sp-4);">
         <div>
@@ -371,7 +375,6 @@ $messageStyles = [
         </div>
       </div>
 
-      <?php if (!($isCandidate && $candidateEmail && $postulado)): ?>
       <aside style="display:grid; gap: var(--sp-4);">
         <div class="card" style="display:grid; gap:.6rem;">
           <h3 class="h5">Resumen de la oferta</h3>
@@ -389,12 +392,8 @@ $messageStyles = [
             <p class="m-0"><?=nl2br(od_e($oferta['empresa_descripcion'])); ?></p>
           </div>
         <?php endif; ?>
-
-        <?php /* Si está postulado ya se muestra la ventana de confirmación arriba */ ?>
       </aside>
-      <?php endif; ?>
     </div>
-    <?php endif; ?>
   <?php endif; ?>
 </section>
 
