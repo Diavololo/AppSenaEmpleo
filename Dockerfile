@@ -9,8 +9,6 @@ RUN apt-get update \
 
 COPY . .
 
-RUN git lfs install \
-  && git lfs pull \
-  && composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader
 
 CMD ["bash", "-lc", "php -S 0.0.0.0: index.php"]
