@@ -7,9 +7,9 @@
  *   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS
  */
 return [
-  'host' => getenv('DB_HOST') ?: '127.0.0.1',
-  'port' => (int)(getenv('DB_PORT') ?: 3306),
-  'name' => getenv('DB_NAME') ?: 'mydb',
+  'host' => getenv('DB_HOST') ?: 'maglev.proxy.rlwy.net',
+  'port' => (int)(getenv('DB_PORT') ?: 27542),
+  'name' => getenv('DB_NAME') ?: 'railway',
   'user' => getenv('DB_USER') ?: 'root',
-  'pass' => getenv('DB_PASS') ?: '1234',
+  'pass' => getenv('DB_PASS') ?: 'QLhbtaeGpcLqstwmxPaeTEhfVhWUlFiD',
 ];
