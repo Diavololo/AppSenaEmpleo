@@ -1,12 +1,10 @@
 services:
   - type: web
     name: bolsa-empleo-sena
-    env: php
+    env: docker
     plan: free
     branch: main
-    buildCommand: |
-      composer install --no-dev --optimize-autoloader
-    startCommand: php -S 0.0.0.0: index.php
+    dockerfilePath: Dockerfile
     envVars:
       - key: APP_ENV
         value: production
