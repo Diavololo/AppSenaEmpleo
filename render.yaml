@@ -6,7 +6,7 @@ services:
     branch: main
     buildCommand: |
       composer install --no-dev --optimize-autoloader
-    startCommand: "php -S 0.0.0.0:$PORT index.php"
+    startCommand: php -S 0.0.0.0: index.php
     envVars:
       - key: APP_ENV
         value: production
