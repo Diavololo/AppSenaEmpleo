@@ -1,5 +1,32 @@
 <?php
+declare(strict_types=1);
+
+if (!function_exists('bootstrap_log')) {
+  function bootstrap_log(string $message): void {
+    error_log('[bootstrap] '.$message);
+  }
+  register_shutdown_function(function (): void {
+    $err = error_get_last();
+    if ($err) {
+      error_log('[bootstrap] shutdown '.json_encode($err));
+    }
+  });
+  set_error_handler(function ($errno, $errstr, $errfile, $errline): bool {
+    bootstrap_log("error {$errno} {$errstr} in {$errfile}:{$errline}");
+    return false;
+  });
+}
+
+bootstrap_log('index boot start');
+$uri = $_SERVER['REQUEST_URI'] ?? '/';
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET' && trim($uri, '/') === 'healthz') {
+  header('Content-Type: text/plain; charset=utf-8');
+  echo 'OK '.date(DATE_ATOM);
+  return;
+}
+
 session_start();
+bootstrap_log('session ready');
 $view = $_GET['view'] ?? null;
 // Normaliza alias para acceder a Ofertaendetalle
 if ($view === 'Ofertaendetalle' || $view === 'ofertaendetalle') {
@@ -34,7 +61,10 @@ if (!isset($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(16)); 
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <?php require __DIR__.'/templates/header.php'; ?>
+  <?php
+    bootstrap_log('render header');
+    require __DIR__.'/templates/header.php';
+  ?>
 
   <?php
     if ($view === 'login') {
@@ -85,6 +115,7 @@ if (!isset($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(16)); 
     } elseif ($view === 'dashboard') {
       require __DIR__.'/pages/dashboard.php';
     } else {
+      bootstrap_log('render home');
       require __DIR__.'/pages/home.php';
     }
   ?>
@@ -93,3 +124,4 @@ if (!isset($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(16)); 
   <script src="js/script.js"></script>
 </body>
 </html>
+<?php bootstrap_log('response rendered'); ?>
