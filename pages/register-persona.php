@@ -203,14 +203,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       $nombre = trim((string)($_POST['nombre'] ?? ''));
       $apellido = trim((string)($_POST['apellido'] ?? ''));
-      $telefono = trim((string)($_POST['telefono'] ?? ''));
+      $telefonoRaw = trim((string)($_POST['telefono'] ?? ''));
+      $telefono = preg_replace('/\D+/', '', $telefonoRaw);
+      if ($telefono === '' || strlen($telefono) < 7 || strlen($telefono) > 15) {
+        throw new RuntimeException('Telefono invalido. Usa solo numeros (7 a 15).');
+      }
+      $_POST['telefono'] = $telefono;
+
       $docTipo = trim((string)($_POST['documento_tipo'] ?? ''));
-      $docNumero = trim((string)($_POST['documento_numero'] ?? ''));
+      $docTiposPermitidos = ['CC','CE','pasaporte','Otro'];
+      if (!in_array($docTipo, $docTiposPermitidos, true)) {
+        throw new RuntimeException('Tipo de documento invalido.');
+      }
+
+      $docNumero = strtoupper(trim((string)($_POST['documento_numero'] ?? '')));
+      if (!preg_match('/^[A-Z0-9]{5,20}$/', $docNumero)) {
+        throw new RuntimeException('Numero de documento invalido. Usa 5 a 20 caracteres alfanumericos.');
+      }
+      $_POST['documento_numero'] = $docNumero;
+
       $pais = trim((string)($_POST['pais'] ?? ''));
       $ciudad = trim((string)($_POST['ciudad'] ?? ''));
       $direccion = trim((string)($_POST['direccion'] ?? ''));
       $perfil = trim((string)($_POST['perfil'] ?? ''));
       $areasInteres = trim((string)($_POST['areas_interes'] ?? ''));
+      if (strlen($nombre) > 80) { $nombre = substr($nombre, 0, 80); }
+      if (strlen($apellido) > 80) { $apellido = substr($apellido, 0, 80); }
+      if (strlen($pais) > 80) { $pais = substr($pais, 0, 80); }
+      if (strlen($ciudad) > 80) { $ciudad = substr($ciudad, 0, 80); }
+      if (strlen($direccion) > 160) { $direccion = substr($direccion, 0, 160); }
+      if (strlen($areasInteres) > 160) { $areasInteres = substr($areasInteres, 0, 160); }
+      if (strlen($perfil) > 1200) { $perfil = substr($perfil, 0, 1200); }
 
       $skillsData = [];
       $skillNamesRaw = $_POST['skill_name'] ?? [];
@@ -224,6 +247,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           }
           if ($skillYears !== null && $skillYears < 0) {
             $skillYears = 0.0;
+          } elseif ($skillYears !== null && $skillYears > 60) {
+            $skillYears = 60.0;
           }
           $skillsData[] = [
             'nombre' => $skillName,
@@ -253,6 +278,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           }
           if ($anios !== null && $anios < 0) {
             $anios = 0.0;
+          } elseif ($anios !== null && $anios > 60) {
+            $anios = 60.0;
           }
           $experienciasData[] = [
             'cargo' => $role,
@@ -479,43 +506,43 @@ for ($i = 0; $i < 2; $i++) {
     <div class="card" style="border-color:#ffd5d5;background:#fff6f6"><strong>Error:</strong> <?=htmlspecialchars($errMsg)?></div>
   <?php endif; ?>
 
-  <form class="card form" method="post" enctype="multipart/form-data" novalidate>
+  <form class="card form" method="post" enctype="multipart/form-data" data-validate="instant" novalidate>
     <input type="hidden" name="_csrf" value="<?=htmlspecialchars($csrf)?>" />
 
     <section>
       <h2>Cuenta</h2>
       <div class="g-3">
         <div class="field"><label for="per_email">Correo *</label><input id="per_email" name="per_email" type="email" required placeholder="tu@email.com" value="<?=htmlspecialchars($_POST['per_email'] ?? '')?>"/></div>
-        <div class="field"><label for="per_password">Contraseña *</label><input id="per_password" name="per_password" type="password" minlength="8" required placeholder="Mínimo 8 caracteres" /></div>
-        <div class="field"><label for="per_password_confirm">Confirmar contraseña *</label><input id="per_password_confirm" name="per_password_confirm" type="password" minlength="8" required placeholder="Repite tu contraseña" /></div>
+        <div class="field"><label for="per_password">Contrase&ntilde;a *</label><input id="per_password" name="per_password" type="password" minlength="8" autocomplete="new-password" required placeholder="M&iacute;nimo 8 caracteres" /></div>
+        <div class="field"><label for="per_password_confirm">Confirmar contrase&ntilde;a *</label><input id="per_password_confirm" name="per_password_confirm" type="password" minlength="8" autocomplete="new-password" required placeholder="Repite tu contrase&ntilde;a" data-match="#per_password" data-match-message="Las contrase&ntilde;as no coinciden." /></div>
       </div>
     </section>
 
     <section>
       <h2>Datos personales</h2>
       <div class="g-3">
-        <div class="field"><label for="nombre">Nombre *</label><input id="nombre" name="nombre" type="text" required placeholder="Nombre" value="<?=htmlspecialchars($_POST['nombre'] ?? '')?>"/></div>
-        <div class="field"><label for="apellido">Apellido *</label><input id="apellido" name="apellido" type="text" required placeholder="Apellido" value="<?=htmlspecialchars($_POST['apellido'] ?? '')?>"/></div>
-        <div class="field"><label for="telefono">Telefono *</label><input id="telefono" name="telefono" type="tel" required placeholder="+57 320 000 0000" value="<?=htmlspecialchars($_POST['telefono'] ?? '')?>"/></div>
+        <div class="field"><label for="nombre">Nombre *</label><input id="nombre" name="nombre" type="text" maxlength="80" required placeholder="Nombre" value="<?=htmlspecialchars($_POST['nombre'] ?? '')?>"/></div>
+        <div class="field"><label for="apellido">Apellido *</label><input id="apellido" name="apellido" type="text" maxlength="80" required placeholder="Apellido" value="<?=htmlspecialchars($_POST['apellido'] ?? '')?>"/></div>
+        <div class="field"><label for="telefono">Telefono *</label><input id="telefono" name="telefono" type="tel" inputmode="numeric" pattern="\d{7,15}" maxlength="15" data-normalize="digits" data-pattern-message="Usa solo numeros (7 a 15)." required placeholder="+57 320 000 0000" value="<?=htmlspecialchars($_POST['telefono'] ?? '')?>"/></div>
         <div class="field"><label for="documento_tipo">Tipo de documento *</label><select id="documento_tipo" name="documento_tipo" required><option value="">Selecciona</option><?php foreach (["CC","CE","pasaporte","Otro"] as $op): ?><option <?=$op===($_POST['documento_tipo'] ?? '')?'selected':''?>><?=$op?></option><?php endforeach; ?></select></div>
-        <div class="field"><label for="documento_numero">Número de documento *</label><input id="documento_numero" name="documento_numero" type="text" required placeholder="123456789" value="<?=htmlspecialchars($_POST['documento_numero'] ?? '')?>"/></div>
+        <div class="field"><label for="documento_numero">N&uacute;mero de documento *</label><input id="documento_numero" name="documento_numero" type="text" inputmode="text" pattern="[A-Za-z0-9]{5,20}" maxlength="20" data-pattern-message="Ingresa entre 5 y 20 caracteres alfanumericos, sin espacios." required placeholder="123456789" value="<?=htmlspecialchars($_POST['documento_numero'] ?? '')?>"/></div>
       </div>
     </section>
 
     <section>
       <h2>Ubicacion</h2>
       <div class="g-3">
-        <div class="field"><label for="pais">País *</label><input id="pais" name="pais" type="text" required placeholder="Colombia" value="<?=htmlspecialchars($_POST['pais'] ?? '')?>"/></div>
-        <div class="field"><label for="ciudad">Ciudad *</label><input id="ciudad" name="ciudad" type="text" required placeholder="Medellín" value="<?=htmlspecialchars($_POST['ciudad'] ?? '')?>"/></div>
-        <div class="field"><label for="direccion">Dirección (opcional)</label><input id="direccion" name="direccion" type="text" placeholder="Calle 00 # 00-00" value="<?=htmlspecialchars($_POST['direccion'] ?? '')?>"/></div>
+        <div class="field"><label for="pais">Pa&iacute;s *</label><input id="pais" name="pais" type="text" maxlength="80" required placeholder="Colombia" value="<?=htmlspecialchars($_POST['pais'] ?? '')?>"/></div>
+        <div class="field"><label for="ciudad">Ciudad *</label><input id="ciudad" name="ciudad" type="text" maxlength="80" required placeholder="Medell&iacute;n" value="<?=htmlspecialchars($_POST['ciudad'] ?? '')?>"/></div>
+        <div class="field"><label for="direccion">Direcci&oacute;n (opcional)</label><input id="direccion" name="direccion" type="text" maxlength="160" placeholder="Calle 00 # 00-00" value="<?=htmlspecialchars($_POST['direccion'] ?? '')?>"/></div>
       </div>
     </section>
 
     <section>
       <h2>Perfil profesional</h2>
       <div class="g-2">
-        <div class="field"><label for="perfil">Resumen de perfil *</label><textarea id="perfil" name="perfil" rows="4" required placeholder="Tu experiencia, habilidades y objetivos…"><?=htmlspecialchars($_POST['perfil'] ?? '')?></textarea></div>
-        <div class="field"><label for="areas_interes">Áreas de interés</label><input id="areas_interes" name="areas_interes" type="text" placeholder="Ej: Desarrollo, Administración, Atención al cliente" value="<?=htmlspecialchars($_POST['areas_interes'] ?? '')?>"/></div>
+        <div class="field"><label for="perfil">Resumen de perfil *</label><textarea id="perfil" name="perfil" rows="4" maxlength="1200" required placeholder="Tu experiencia, habilidades y objetivos…"><?=htmlspecialchars($_POST['perfil'] ?? '')?></textarea></div>
+        <div class="field"><label for="areas_interes">&Aacute;reas de inter&eacute;s</label><input id="areas_interes" name="areas_interes" type="text" maxlength="160" placeholder="Ej: Desarrollo, Administraci&oacute;n, Atenci&oacute;n al cliente" value="<?=htmlspecialchars($_POST['areas_interes'] ?? '')?>"/></div>
       </div>
     </section>
 
@@ -530,7 +557,7 @@ for ($i = 0; $i < 2; $i++) {
           </div>
           <div class="field">
             <label for="skill_years_<?=$i?>">Años de experiencia</label>
-            <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" placeholder="Ej: 2" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
+            <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
           </div>
         </div>
       <?php endfor; ?>
@@ -559,7 +586,7 @@ for ($i = 0; $i < 2; $i++) {
             </div>
             <div class="field">
               <label for="exp_years_<?=$i?>">Años de experiencia</label>
-              <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" placeholder="Ej: 2" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
+              <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
             </div>
           </div>
           <div class="field">

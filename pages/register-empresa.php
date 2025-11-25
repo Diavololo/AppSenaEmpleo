@@ -236,11 +236,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
 
       $contactoNombre = trim((string)($_POST['contacto_nombre'] ?? ''));
-      $contactoTel = trim((string)($_POST['contacto_tel'] ?? ''));
+      if (strlen($contactoNombre) > 140) { $contactoNombre = substr($contactoNombre, 0, 140); }
+      $contactoTelRaw = trim((string)($_POST['contacto_tel'] ?? ''));
+      $contactoTel = preg_replace('/\D+/', '', $contactoTelRaw);
+      if ($contactoTel === '' || strlen($contactoTel) < 7 || strlen($contactoTel) > 15) {
+        throw new RuntimeException('Telefono de contacto invalido. Usa solo numeros (7 a 15).');
+      }
+      $_POST['contacto_tel'] = $contactoTel;
+
       $razonSocial = trim((string)($_POST['razon_social'] ?? ''));
       $nombreComercial = trim((string)($_POST['nombre_comercial'] ?? ''));
-      $nit = trim((string)($_POST['nit'] ?? ''));
+
+      $nit = strtoupper(trim((string)($_POST['nit'] ?? '')));
+      if (!preg_match('/^[0-9]{5,16}(?:-[0-9]{1,2})?$/', $nit)) {
+        throw new RuntimeException('NIT/ID fiscal invalido. Usa solo numeros y guion opcional.');
+      }
+      $_POST['nit'] = $nit;
+
       $tipoEntidad = trim((string)($_POST['tipo_entidad'] ?? ''));
+      $tipoEntidad = html_entity_decode($tipoEntidad, ENT_QUOTES, 'UTF-8');
+      $tiposEntidad = ['S.A.S.','S.A.','Fundación','Cooperativa','Otra'];
+      if (!in_array($tipoEntidad, $tiposEntidad, true)) {
+        throw new RuntimeException('Tipo de entidad invalido.');
+      }
       $anioFundacionStr = trim((string)($_POST['anio_fundacion'] ?? ''));
       $anioFundacion = null;
       if ($anioFundacionStr !== '') {
@@ -254,16 +272,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       }
       $sitioWeb = re_validate_optional_url($_POST['sitio_web'] ?? null, 'Sitio web');
       $pais = trim((string)($_POST['pais'] ?? ''));
+      if (strlen($pais) > 80) { $pais = substr($pais, 0, 80); }
       $ciudad = trim((string)($_POST['ciudad'] ?? ''));
+      if (strlen($ciudad) > 80) { $ciudad = substr($ciudad, 0, 80); }
       $direccion = trim((string)($_POST['direccion'] ?? ''));
+      if (strlen($direccion) > 180) { $direccion = substr($direccion, 0, 180); }
+
       $tamano = trim((string)($_POST['tamano'] ?? ''));
+      $tamanosPermitidos = ['1-10','11-50','51-200','201-500','500+'];
+      if (!in_array($tamano, $tamanosPermitidos, true)) {
+        throw new RuntimeException('Tamano de empresa invalido.');
+      }
+
       $industria = trim((string)($_POST['industria'] ?? ''));
+      if (strlen($industria) > 180) { $industria = substr($industria, 0, 180); }
+
       $modalidadTrabajo = trim((string)($_POST['modalidad_trabajo'] ?? ''));
+      $modalidadTrabajo = html_entity_decode($modalidadTrabajo, ENT_QUOTES, 'UTF-8');
+      $modalidadNombre = re_normalize_modalidad($modalidadTrabajo);
+      $modalidadesPermitidas = ['Remoto','Hibrido','Presencial'];
+      if (!in_array($modalidadNombre, $modalidadesPermitidas, true)) {
+        throw new RuntimeException('Modalidad de trabajo invalida.');
+      }
       $areasContratacion = trim((string)($_POST['areas_contratacion'] ?? ''));
+      if (strlen($areasContratacion) > 240) { $areasContratacion = substr($areasContratacion, 0, 240); }
       $tecnologias = trim((string)($_POST['tecnologias'] ?? ''));
+      if (strlen($tecnologias) > 240) { $tecnologias = substr($tecnologias, 0, 240); }
       $descripcion = trim((string)($_POST['descripcion'] ?? ''));
+      if (strlen($descripcion) > 1200) { $descripcion = substr($descripcion, 0, 1200); }
       $mision = trim((string)($_POST['mision'] ?? ''));
+      if (strlen($mision) > 240) { $mision = substr($mision, 0, 240); }
       $valores = trim((string)($_POST['valores'] ?? ''));
+      if (strlen($valores) > 240) { $valores = substr($valores, 0, 240); }
       $linkLinkedin = re_validate_optional_url($_POST['link_linkedin'] ?? null, 'LinkedIn');
       $linkFacebook = re_validate_optional_url($_POST['link_facebook'] ?? null, 'Facebook');
       $linkInstagram = re_validate_optional_url($_POST['link_instagram'] ?? null, 'Instagram');
@@ -341,7 +381,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $sectorId = $sectorValor !== '' ? re_lookup_catalog($pdo, 'sectores', $sectorValor) : null;
 
-        $modalidadNombre = re_normalize_modalidad($modalidadTrabajo);
         $modalidadId = $modalidadNombre !== '' ? re_lookup_catalog($pdo, 'modalidades', $modalidadNombre) : null;
 
         $insEmp = $pdo->prepare('INSERT INTO empresas (nit, razon_social, nombre_comercial, sector_id, tamano_id, sitio_web, telefono, email_contacto, ciudad, direccion, descripcion, logo_url, portada_url, linkedin_url, facebook_url, instagram_url, verificada, estado) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
@@ -470,26 +509,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="card" style="border-color:#ffd5d5;background:#fff6f6"><strong>Error:</strong> <?=htmlspecialchars($errMsg)?></div>
   <?php endif; ?>
 
-  <form class="card form" method="post" enctype="multipart/form-data" novalidate>
+  <form class="card form" method="post" enctype="multipart/form-data" data-validate="instant" novalidate>
     <input type="hidden" name="_csrf" value="<?=htmlspecialchars($csrf)?>" />
 
     <section>
       <h2>Cuenta del reclutador</h2>
       <div class="g-3">
         <div class="field"><label for="emp_email">Correo corporativo *</label><input id="emp_email" name="emp_email" type="email" required placeholder="talento@empresa.com" value="<?=htmlspecialchars($_POST['emp_email'] ?? '')?>"/></div>
-        <div class="field"><label for="emp_password">Contrase&ntilde;a *</label><input id="emp_password" name="emp_password" type="password" minlength="8" required placeholder="M&iacute;nimo 8 caracteres" /></div>
-        <div class="field"><label for="emp_password_confirm">Confirmar contrase&ntilde;a *</label><input id="emp_password_confirm" name="emp_password_confirm" type="password" minlength="8" required placeholder="Repite tu contrase&ntilde;a" /></div>
-        <div class="field"><label for="contacto_nombre">Nombre del contacto *</label><input id="contacto_nombre" name="contacto_nombre" type="text" required placeholder="Nombre Apellido" value="<?=htmlspecialchars($_POST['contacto_nombre'] ?? '')?>"/></div>
-        <div class="field"><label for="contacto_tel">Tel&eacute;fono *</label><input id="contacto_tel" name="contacto_tel" type="tel" required placeholder="+57 320 000 0000" value="<?=htmlspecialchars($_POST['contacto_tel'] ?? '')?>"/></div>
+        <div class="field"><label for="emp_password">Contrase&ntilde;a *</label><input id="emp_password" name="emp_password" type="password" minlength="8" autocomplete="new-password" required placeholder="M&iacute;nimo 8 caracteres" /></div>
+        <div class="field"><label for="emp_password_confirm">Confirmar contrase&ntilde;a *</label><input id="emp_password_confirm" name="emp_password_confirm" type="password" minlength="8" autocomplete="new-password" required placeholder="Repite tu contrase&ntilde;a" data-match="#emp_password" data-match-message="Las contrase&ntilde;as no coinciden." /></div>
+        <div class="field"><label for="contacto_nombre">Nombre del contacto *</label><input id="contacto_nombre" name="contacto_nombre" type="text" maxlength="140" required placeholder="Nombre Apellido" value="<?=htmlspecialchars($_POST['contacto_nombre'] ?? '')?>"/></div>
+        <div class="field"><label for="contacto_tel">Tel&eacute;fono *</label><input id="contacto_tel" name="contacto_tel" type="tel" inputmode="numeric" pattern="\d{7,15}" maxlength="15" data-normalize="digits" data-pattern-message="Usa solo numeros (7 a 15)." required placeholder="+57 320 000 0000" value="<?=htmlspecialchars($_POST['contacto_tel'] ?? '')?>"/></div>
       </div>
     </section>
 
     <section>
       <h2>Informaci&oacute;n legal</h2>
       <div class="g-3">
-        <div class="field"><label for="razon_social">Raz&oacute;n social *</label><input id="razon_social" name="razon_social" type="text" required placeholder="DevAndes S.A.S." value="<?=htmlspecialchars($_POST['razon_social'] ?? '')?>"/></div>
-        <div class="field"><label for="nombre_comercial">Nombre comercial *</label><input id="nombre_comercial" name="nombre_comercial" type="text" required placeholder="DevAndes" value="<?=htmlspecialchars($_POST['nombre_comercial'] ?? '')?>"/></div>
-        <div class="field"><label for="nit">NIT / ID fiscal *</label><input id="nit" name="nit" type="text" required placeholder="900123456-7" value="<?=htmlspecialchars($_POST['nit'] ?? '')?>"/></div>
+        <div class="field"><label for="razon_social">Raz&oacute;n social *</label><input id="razon_social" name="razon_social" type="text" maxlength="160" required placeholder="DevAndes S.A.S." value="<?=htmlspecialchars($_POST['razon_social'] ?? '')?>"/></div>
+        <div class="field"><label for="nombre_comercial">Nombre comercial *</label><input id="nombre_comercial" name="nombre_comercial" type="text" maxlength="140" required placeholder="DevAndes" value="<?=htmlspecialchars($_POST['nombre_comercial'] ?? '')?>"/></div>
+        <div class="field"><label for="nit">NIT / ID fiscal *</label><input id="nit" name="nit" type="text" inputmode="numeric" pattern="\d{5,16}(-\d{1,2})?" maxlength="18" data-normalize="nit" data-pattern-message="Solo numeros y guion final opcional." required placeholder="900123456-7" value="<?=htmlspecialchars($_POST['nit'] ?? '')?>"/></div>
         <div class="field"><label for="tipo_entidad">Tipo de entidad *</label><select id="tipo_entidad" name="tipo_entidad" required><option value="">Selecciona</option><?php foreach (["S.A.S.","S.A.","Fundaci&oacute;n","Cooperativa","Otra"] as $op): ?><option <?=$op===($_POST['tipo_entidad'] ?? '')?'selected':''?>><?=$op?></option><?php endforeach; ?></select></div>
         <div class="field"><label for="anio_fundacion">A&ntilde;o de fundaci&oacute;n</label><input id="anio_fundacion" name="anio_fundacion" type="number" min="1900" max="2099" placeholder="2005" value="<?=htmlspecialchars($_POST['anio_fundacion'] ?? '')?>"/></div>
         <div class="field"><label for="sitio_web">Sitio web</label><input id="sitio_web" name="sitio_web" type="url" placeholder="https://empresa.com" value="<?=htmlspecialchars($_POST['sitio_web'] ?? '')?>"/></div>
@@ -499,11 +538,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <section>
       <h2>Ubicaci&oacute;n, tama&ntilde;o y sector</h2>
       <div class="g-3">
-        <div class="field"><label for="pais">Pa&iacute;s *</label><input id="pais" name="pais" type="text" required placeholder="Colombia" value="<?=htmlspecialchars($_POST['pais'] ?? '')?>"/></div>
-        <div class="field"><label for="ciudad">Ciudad *</label><input id="ciudad" name="ciudad" type="text" required placeholder="Bogot&aacute;" value="<?=htmlspecialchars($_POST['ciudad'] ?? '')?>"/></div>
-        <div class="field"><label for="direccion">Direcci&oacute;n (opcional)</label><input id="direccion" name="direccion" type="text" placeholder="Calle 00 # 00-00" value="<?=htmlspecialchars($_POST['direccion'] ?? '')?>"/></div>
+        <div class="field"><label for="pais">Pa&iacute;s *</label><input id="pais" name="pais" type="text" maxlength="80" required placeholder="Colombia" value="<?=htmlspecialchars($_POST['pais'] ?? '')?>"/></div>
+        <div class="field"><label for="ciudad">Ciudad *</label><input id="ciudad" name="ciudad" type="text" maxlength="80" required placeholder="Bogot&aacute;" value="<?=htmlspecialchars($_POST['ciudad'] ?? '')?>"/></div>
+        <div class="field"><label for="direccion">Direcci&oacute;n (opcional)</label><input id="direccion" name="direccion" type="text" maxlength="180" placeholder="Calle 00 # 00-00" value="<?=htmlspecialchars($_POST['direccion'] ?? '')?>"/></div>
         <div class="field"><label for="tamano">Tama&ntilde;o *</label><select id="tamano" name="tamano" required><option value="">Selecciona</option><?php foreach (["1-10","11-50","51-200","201-500","500+"] as $op): ?><option <?=$op===($_POST['tamano'] ?? '')?'selected':''?>><?=$op?></option><?php endforeach; ?></select></div>
-        <div class="field"><label for="industria">Industria *</label><input id="industria" name="industria" type="text" required placeholder="Tecnolog&iacute;a / Log&iacute;stica / Salud..." value="<?=htmlspecialchars($_POST['industria'] ?? '')?>"/></div>
+        <div class="field"><label for="industria">Industria *</label><input id="industria" name="industria" type="text" maxlength="180" required placeholder="Tecnolog&iacute;a / Log&iacute;stica / Salud..." value="<?=htmlspecialchars($_POST['industria'] ?? '')?>"/></div>
         <div class="field"><label for="modalidad_trabajo">Modalidad de trabajo *</label><select id="modalidad_trabajo" name="modalidad_trabajo" required><option value="">Selecciona</option><?php foreach (["Remoto","H&iacute;brido","Presencial"] as $op): ?><option <?=$op===($_POST['modalidad_trabajo'] ?? '')?'selected':''?>><?=$op?></option><?php endforeach; ?></select></div>
       </div>
     </section>
@@ -511,17 +550,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <section>
       <h2>Enfoque de contrataci&oacute;n</h2>
       <div class="g-2">
-        <div class="field"><label for="areas_contratacion">&Aacute;reas de contrataci&oacute;n frecuentes</label><input id="areas_contratacion" name="areas_contratacion" type="text" placeholder="Ej: Desarrollo, Atenci&oacute;n al cliente, Operaciones" value="<?=htmlspecialchars($_POST['areas_contratacion'] ?? '')?>"/><small class="muted">Sep&aacute;ralas por comas (ayuda al matching).</small></div>
-        <div class="field"><label for="tecnologias">Tecnolog&iacute;as / herramientas clave</label><input id="tecnologias" name="tecnologias" type="text" placeholder="Laravel, MySQL, Excel, SAP" value="<?=htmlspecialchars($_POST['tecnologias'] ?? '')?>"/></div>
+        <div class="field"><label for="areas_contratacion">&Aacute;reas de contrataci&oacute;n frecuentes</label><input id="areas_contratacion" name="areas_contratacion" type="text" maxlength="240" placeholder="Ej: Desarrollo, Atenci&oacute;n al cliente, Operaciones" value="<?=htmlspecialchars($_POST['areas_contratacion'] ?? '')?>"/><small class="muted">Sep&aacute;ralas por comas (ayuda al matching).</small></div>
+        <div class="field"><label for="tecnologias">Tecnolog&iacute;as / herramientas clave</label><input id="tecnologias" name="tecnologias" type="text" maxlength="240" placeholder="Laravel, MySQL, Excel, SAP" value="<?=htmlspecialchars($_POST['tecnologias'] ?? '')?>"/></div>
       </div>
     </section>
 
     <section>
       <h2>Descripci&oacute;n y cultura</h2>
       <div class="g-2">
-        <div class="field"><label for="descripcion">Descripci&oacute;n de la empresa *</label><textarea id="descripcion" name="descripcion" rows="4" required placeholder="Qui&eacute;nes somos, qu&eacute; hacemos y nuestro impacto..."><?=htmlspecialchars($_POST['descripcion'] ?? '')?></textarea></div>
-        <div class="field"><label for="mision">Prop&oacute;sito / Misi&oacute;n (opcional)</label><input id="mision" name="mision" type="text" placeholder="Nuestro prop&oacute;sito es..." value="<?=htmlspecialchars($_POST['mision'] ?? '')?>"/></div>
-        <div class="field"><label for="valores">Valores (opcional)</label><input id="valores" name="valores" type="text" placeholder="Ej: Integridad, Innovaci&oacute;n, Trabajo en equipo" value="<?=htmlspecialchars($_POST['valores'] ?? '')?>"/></div>
+        <div class="field"><label for="descripcion">Descripci&oacute;n de la empresa *</label><textarea id="descripcion" name="descripcion" rows="4" maxlength="800" required placeholder="Qui&eacute;nes somos, qu&eacute; hacemos y nuestro impacto..."><?=htmlspecialchars($_POST['descripcion'] ?? '')?></textarea></div>
+        <div class="field"><label for="mision">Prop&oacute;sito / Misi&oacute;n (opcional)</label><input id="mision" name="mision" type="text" maxlength="240" placeholder="Nuestro prop&oacute;sito es..." value="<?=htmlspecialchars($_POST['mision'] ?? '')?>"/></div>
+        <div class="field"><label for="valores">Valores (opcional)</label><input id="valores" name="valores" type="text" maxlength="240" placeholder="Ej: Integridad, Innovaci&oacute;n, Trabajo en equipo" value="<?=htmlspecialchars($_POST['valores'] ?? '')?>"/></div>
       </div>
     </section>
 
