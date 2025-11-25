@@ -77,6 +77,30 @@ if (!function_exists('rp_store_upload')) {
   }
 }
 
+if (!function_exists('rp_collect_files')) {
+  /**
+   * Normaliza la estructura de $_FILES para campos multiple ([])
+   * @return array<int,array{error?:int,tmp_name?:string,name?:string,size?:int,type?:string}>
+   */
+  function rp_collect_files(string $field): array {
+    $src = $_FILES[$field] ?? null;
+    if (!is_array($src) || !isset($src['name']) || !is_array($src['name'])) {
+      return [];
+    }
+    $files = [];
+    foreach (array_keys($src['name']) as $idx) {
+      $files[$idx] = [
+        'name' => $src['name'][$idx] ?? null,
+        'type' => $src['type'][$idx] ?? null,
+        'tmp_name' => $src['tmp_name'][$idx] ?? null,
+        'error' => $src['error'][$idx] ?? null,
+        'size' => $src['size'][$idx] ?? null,
+      ];
+    }
+    return $files;
+  }
+}
+
 $rootPath = dirname(__DIR__);
 $uploadsRoot = $rootPath.DIRECTORY_SEPARATOR.'uploads';
 if (!is_dir($uploadsRoot)) {
@@ -148,6 +172,32 @@ if ($pdo instanceof PDO) {
       PRIMARY KEY (id),
       KEY idx_skill_email (email),
       CONSTRAINT fk_skill_candidato FOREIGN KEY (email) REFERENCES candidatos (email) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  ");
+  $pdo->exec("
+    CREATE TABLE IF NOT EXISTS candidato_experiencia_certificados (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      experiencia_id BIGINT UNSIGNED NOT NULL,
+      documento_id BIGINT UNSIGNED NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_cec_exp (experiencia_id),
+      KEY idx_cec_doc (documento_id),
+      CONSTRAINT fk_cec_exp FOREIGN KEY (experiencia_id) REFERENCES candidato_experiencias (id) ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT fk_cec_doc FOREIGN KEY (documento_id) REFERENCES candidato_documentos (id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  ");
+  $pdo->exec("
+    CREATE TABLE IF NOT EXISTS candidato_educacion_certificados (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      educacion_id BIGINT UNSIGNED NOT NULL,
+      documento_id BIGINT UNSIGNED NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_ced_edu (educacion_id),
+      KEY idx_ced_doc (documento_id),
+      CONSTRAINT fk_ced_edu FOREIGN KEY (educacion_id) REFERENCES candidato_educacion (id) ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT fk_ced_doc FOREIGN KEY (documento_id) REFERENCES candidato_documentos (id) ON DELETE CASCADE ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   ");
 }
@@ -263,6 +313,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $expPeriodos = $_POST['exp_period'] ?? [];
       $expAnos = $_POST['exp_years'] ?? [];
       $expDescs = $_POST['exp_desc'] ?? [];
+      $expArchivos = rp_collect_files('exp_proof');
       if (is_array($expRoles)) {
         foreach ($expRoles as $idx => $roleRaw) {
           $role = trim((string)$roleRaw);
@@ -287,6 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'periodo' => $periodo !== '' ? $periodo : null,
             'anios' => $anios,
             'descripcion' => $descripcion !== '' ? $descripcion : null,
+            'archivo' => $expArchivos[$idx] ?? null,
           ];
         }
       }
@@ -296,6 +348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $eduInstituciones = $_POST['edu_institution'] ?? [];
       $eduPeriodos = $_POST['edu_period'] ?? [];
       $eduDescs = $_POST['edu_desc'] ?? [];
+      $eduArchivos = rp_collect_files('edu_proof');
       if (is_array($eduTitulos)) {
         foreach ($eduTitulos as $idx => $tituloRaw) {
           $titulo = trim((string)$tituloRaw);
@@ -313,6 +366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'institucion' => $institucion !== '' ? $institucion : null,
             'periodo' => $periodo !== '' ? $periodo : null,
             'descripcion' => $descripcion !== '' ? $descripcion : null,
+            'archivo' => $eduArchivos[$idx] ?? null,
           ];
         }
       }
@@ -325,7 +379,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
       $cvDir = $personaDir.DIRECTORY_SEPARATOR.'cv';
       $fotoDir = $personaDir.DIRECTORY_SEPARATOR.'foto';
+      $expCertDir = $personaDir.DIRECTORY_SEPARATOR.'experiencias';
+      $eduCertDir = $personaDir.DIRECTORY_SEPARATOR.'educacion';
       $publicBase = '/uploads/candidatos/'.$slug;
+      $publicExpBase = $publicBase.'/experiencias';
+      $publicEduBase = $publicBase.'/educacion';
+      $certAllowed = [
+        'pdf' => ['application/pdf'],
+        'doc' => ['application/msword', 'application/msword; charset=binary', 'application/vnd.ms-office', 'application/octet-stream'],
+        'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        'png' => ['image/png'],
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+      ];
 
       $cvInfo = rp_store_upload(
         $_FILES['cv'] ?? [],
@@ -399,6 +465,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           (new DateTimeImmutable())->format('Y-m-d H:i:s'),
         ]);
 
+        $expCertStmt = $pdo->prepare('INSERT INTO candidato_experiencia_certificados (experiencia_id, documento_id) VALUES (?,?)');
+        $eduCertStmt = $pdo->prepare('INSERT INTO candidato_educacion_certificados (educacion_id, documento_id) VALUES (?,?)');
+
         if ($skillsData) {
           $skillStmt = $pdo->prepare('INSERT INTO candidato_habilidades (email, nombre, anios_experiencia) VALUES (?,?,?)');
           foreach ($skillsData as $entry) {
@@ -422,6 +491,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               $exp['descripcion'],
               $order,
             ]);
+            $expId = (int)$pdo->lastInsertId();
+            $archivo = $exp['archivo'] ?? null;
+            if (is_array($archivo) && (($archivo['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE)) {
+              $expDoc = rp_store_upload(
+                $archivo,
+                $certAllowed,
+                $expCertDir,
+                $publicExpBase,
+                'exp-'.$order,
+                5 * 1024 * 1024
+              );
+              $cleanupFiles[] = $expDoc['absolute'];
+              $docStmt->execute([
+                $email,
+                'certificado',
+                $expDoc['original'],
+                $expDoc['relative'],
+                $expDoc['mime'],
+                $expDoc['size'],
+              ]);
+              $expDocId = (int)$pdo->lastInsertId();
+              $expCertStmt->execute([$expId, $expDocId]);
+            }
           }
         }
 
@@ -436,6 +528,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               $edu['descripcion'],
               $order,
             ]);
+            $eduId = (int)$pdo->lastInsertId();
+            $archivo = $edu['archivo'] ?? null;
+            if (is_array($archivo) && (($archivo['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE)) {
+              $eduDoc = rp_store_upload(
+                $archivo,
+                $certAllowed,
+                $eduCertDir,
+                $publicEduBase,
+                'edu-'.$order,
+                5 * 1024 * 1024
+              );
+              $cleanupFiles[] = $eduDoc['absolute'];
+              $docStmt->execute([
+                $email,
+                'certificado',
+                $eduDoc['original'],
+                $eduDoc['relative'],
+                $eduDoc['mime'],
+                $eduDoc['size'],
+              ]);
+              $eduDocId = (int)$pdo->lastInsertId();
+              $eduCertStmt->execute([$eduId, $eduDocId]);
+            }
           }
         }
 
@@ -463,34 +578,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   }
 }
 
-$skillFormNames = is_array($skillNamesRaw ?? null) ? $skillNamesRaw : [];
-$skillFormYears = is_array($skillYearsRaw ?? null) ? $skillYearsRaw : [];
-for ($i = 0; $i < 3; $i++) {
-  if (!array_key_exists($i, $skillFormNames)) { $skillFormNames[$i] = ''; }
-  if (!array_key_exists($i, $skillFormYears)) { $skillFormYears[$i] = ''; }
-}
-$expFormRoles = is_array($expRoles ?? null) ? $expRoles : [];
-$expFormEmpresas = is_array($expEmpresas ?? null) ? $expEmpresas : [];
-$expFormPeriodos = is_array($expPeriodos ?? null) ? $expPeriodos : [];
-$expFormAnos = is_array($expAnos ?? null) ? $expAnos : [];
-$expFormDescs = is_array($expDescs ?? null) ? $expDescs : [];
-for ($i = 0; $i < 2; $i++) {
-  if (!array_key_exists($i, $expFormRoles)) { $expFormRoles[$i] = ''; }
-  if (!array_key_exists($i, $expFormEmpresas)) { $expFormEmpresas[$i] = ''; }
-  if (!array_key_exists($i, $expFormPeriodos)) { $expFormPeriodos[$i] = ''; }
-  if (!array_key_exists($i, $expFormAnos)) { $expFormAnos[$i] = ''; }
-  if (!array_key_exists($i, $expFormDescs)) { $expFormDescs[$i] = ''; }
-}
-$eduFormTitulos = is_array($eduTitulos ?? null) ? $eduTitulos : [];
-$eduFormInstituciones = is_array($eduInstituciones ?? null) ? $eduInstituciones : [];
-$eduFormPeriodos = is_array($eduPeriodos ?? null) ? $eduPeriodos : [];
-$eduFormDescs = is_array($eduDescs ?? null) ? $eduDescs : [];
-for ($i = 0; $i < 2; $i++) {
-  if (!array_key_exists($i, $eduFormTitulos)) { $eduFormTitulos[$i] = ''; }
-  if (!array_key_exists($i, $eduFormInstituciones)) { $eduFormInstituciones[$i] = ''; }
-  if (!array_key_exists($i, $eduFormPeriodos)) { $eduFormPeriodos[$i] = ''; }
-  if (!array_key_exists($i, $eduFormDescs)) { $eduFormDescs[$i] = ''; }
-}
+$skillFormNames = array_values(is_array($skillNamesRaw ?? null) ? $skillNamesRaw : []);
+$skillFormYears = array_values(is_array($skillYearsRaw ?? null) ? $skillYearsRaw : []);
+if (!$skillFormNames) { $skillFormNames = ['']; }
+if (count($skillFormYears) < count($skillFormNames)) { $skillFormYears = array_pad($skillFormYears, count($skillFormNames), ''); }
+$expFormRoles = array_values(is_array($expRoles ?? null) ? $expRoles : []);
+$expFormEmpresas = array_values(is_array($expEmpresas ?? null) ? $expEmpresas : []);
+$expFormPeriodos = array_values(is_array($expPeriodos ?? null) ? $expPeriodos : []);
+$expFormAnos = array_values(is_array($expAnos ?? null) ? $expAnos : []);
+$expFormDescs = array_values(is_array($expDescs ?? null) ? $expDescs : []);
+if (!$expFormRoles) { $expFormRoles = ['']; }
+if (count($expFormEmpresas) < count($expFormRoles)) { $expFormEmpresas = array_pad($expFormEmpresas, count($expFormRoles), ''); }
+if (count($expFormPeriodos) < count($expFormRoles)) { $expFormPeriodos = array_pad($expFormPeriodos, count($expFormRoles), ''); }
+if (count($expFormAnos) < count($expFormRoles)) { $expFormAnos = array_pad($expFormAnos, count($expFormRoles), ''); }
+if (count($expFormDescs) < count($expFormRoles)) { $expFormDescs = array_pad($expFormDescs, count($expFormRoles), ''); }
+
+$eduFormTitulos = array_values(is_array($eduTitulos ?? null) ? $eduTitulos : []);
+$eduFormInstituciones = array_values(is_array($eduInstituciones ?? null) ? $eduInstituciones : []);
+$eduFormPeriodos = array_values(is_array($eduPeriodos ?? null) ? $eduPeriodos : []);
+$eduFormDescs = array_values(is_array($eduDescs ?? null) ? $eduDescs : []);
+if (!$eduFormTitulos) { $eduFormTitulos = ['']; }
+if (count($eduFormInstituciones) < count($eduFormTitulos)) { $eduFormInstituciones = array_pad($eduFormInstituciones, count($eduFormTitulos), ''); }
+if (count($eduFormPeriodos) < count($eduFormTitulos)) { $eduFormPeriodos = array_pad($eduFormPeriodos, count($eduFormTitulos), ''); }
+if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($eduFormDescs, count($eduFormTitulos), ''); }
 ?>
 
 <!-- Registro de Persona (parcial) -->
@@ -548,82 +658,116 @@ for ($i = 0; $i < 2; $i++) {
 
     <section>
       <h2>Habilidades y experiencia</h2>
-      <p class="muted">Añade hasta tres habilidades clave con sus años de experiencia.</p>
-      <?php for ($i = 0; $i < 3; $i++): ?>
-        <div class="g-3">
-          <div class="field">
-            <label for="skill_name_<?=$i?>">Habilidad <?=($i+1)?></label>
-            <input id="skill_name_<?=$i?>" name="skill_name[]" type="text" placeholder="Ej: Laravel" value="<?=htmlspecialchars($skillFormNames[$i] ?? '')?>"/>
+      <p class="muted">Añade habilidades clave y años de experiencia. Puedes agregar o quitar según necesites.</p>
+      <div id="skill-list" data-collection="skill">
+        <?php foreach ($skillFormNames as $i => $val): ?>
+          <div class="card skill-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+            <div class="g-3" style="align-items:end;">
+              <div class="field">
+                <label for="skill_name_<?=$i?>" data-num-label="Habilidad">Habilidad <?=($i+1)?></label>
+                <input id="skill_name_<?=$i?>" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL" value="<?=htmlspecialchars($skillFormNames[$i] ?? '')?>"/>
+              </div>
+              <div class="field">
+                <label for="skill_years_<?=$i?>">Años de experiencia</label>
+                <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
+              </div>
+              <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
+                <?php if ($i > 0): ?><button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button><?php endif; ?>
+              </div>
+            </div>
           </div>
-          <div class="field">
-            <label for="skill_years_<?=$i?>">Años de experiencia</label>
-            <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
-          </div>
-        </div>
-      <?php endfor; ?>
+        <?php endforeach; ?>
+      </div>
+      <button type="button" class="btn btn-add" data-add-row="#skill-template" data-target="#skill-list">Agregar habilidad</button>
     </section>
 
     <section>
       <h2>Experiencia profesional</h2>
-      <p class="muted">Información opcional. Puedes completarla más adelante desde tu perfil.</p>
-      <?php for ($i = 0; $i < 2; $i++): ?>
-        <fieldset class="card" style="padding:var(--sp-2);margin-block:var(--sp-2);">
-          <legend>Experiencia <?=($i+1)?></legend>
-          <div class="g-2">
-            <div class="field">
-              <label for="exp_role_<?=$i?>">Cargo</label>
-              <input id="exp_role_<?=$i?>" name="exp_role[]" type="text" placeholder="Ej: Auxiliar de Bodega" value="<?=htmlspecialchars($expFormRoles[$i] ?? '')?>"/>
+      <p class="muted">Información opcional. Puedes completarla más adelante desde tu perfil. Añade tantas experiencias como necesites, incluyendo voluntariados o prácticas, y opcionalmente sube un soporte (PDF/imagen).</p>
+      <div id="exp-list" data-collection="exp">
+        <?php foreach ($expFormRoles as $i => $val): ?>
+          <fieldset class="card exp-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+            <legend data-num-label="Experiencia">Experiencia <?=($i+1)?></legend>
+            <?php if ($i > 0): ?>
+              <div class="field" style="display:flex;justify-content:flex-end;">
+                <button type="button" class="btn btn-ghost danger" data-remove-row=".exp-item">Eliminar experiencia</button>
+              </div>
+            <?php endif; ?>
+            <div class="g-2">
+              <div class="field">
+                <label for="exp_role_<?=$i?>">Cargo / Rol</label>
+                <input id="exp_role_<?=$i?>" name="exp_role[]" type="text" placeholder="Ej: Auxiliar de Bodega" value="<?=htmlspecialchars($expFormRoles[$i] ?? '')?>"/>
+              </div>
+              <div class="field">
+                <label for="exp_company_<?=$i?>">Empresa / Entidad</label>
+                <input id="exp_company_<?=$i?>" name="exp_company[]" type="text" placeholder="Ej: Logisur" value="<?=htmlspecialchars($expFormEmpresas[$i] ?? '')?>"/>
+              </div>
+            </div>
+            <div class="g-3">
+              <div class="field">
+                <label for="exp_period_<?=$i?>">Periodo</label>
+                <input id="exp_period_<?=$i?>" name="exp_period[]" type="text" placeholder="Ej: 2023-2025" value="<?=htmlspecialchars($expFormPeriodos[$i] ?? '')?>"/>
+              </div>
+              <div class="field">
+                <label for="exp_years_<?=$i?>">Años de experiencia</label>
+                <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
+              </div>
             </div>
             <div class="field">
-              <label for="exp_company_<?=$i?>">Empresa / Entidad</label>
-              <input id="exp_company_<?=$i?>" name="exp_company[]" type="text" placeholder="Ej: Logisur" value="<?=htmlspecialchars($expFormEmpresas[$i] ?? '')?>"/>
-            </div>
-          </div>
-          <div class="g-3">
-            <div class="field">
-              <label for="exp_period_<?=$i?>">Periodo</label>
-              <input id="exp_period_<?=$i?>" name="exp_period[]" type="text" placeholder="Ej: 2023-2025" value="<?=htmlspecialchars($expFormPeriodos[$i] ?? '')?>"/>
+              <label for="exp_desc_<?=$i?>">Descripción</label>
+              <textarea id="exp_desc_<?=$i?>" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas…"><?=htmlspecialchars($expFormDescs[$i] ?? '')?></textarea>
             </div>
             <div class="field">
-              <label for="exp_years_<?=$i?>">Años de experiencia</label>
-              <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
+              <label for="exp_proof_<?=$i?>">Soporte (PDF/Imagen)</label>
+              <input id="exp_proof_<?=$i?>" name="exp_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+              <small class="muted">Opcional. Se usará para validar la experiencia.</small>
             </div>
-          </div>
-          <div class="field">
-            <label for="exp_desc_<?=$i?>">Descripción</label>
-            <textarea id="exp_desc_<?=$i?>" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas…"><?=htmlspecialchars($expFormDescs[$i] ?? '')?></textarea>
-          </div>
-        </fieldset>
-      <?php endfor; ?>
+          </fieldset>
+        <?php endforeach; ?>
+      </div>
+      <button type="button" class="btn btn-add" data-add-row="#exp-template" data-target="#exp-list">Agregar experiencia</button>
     </section>
 
     <section>
       <h2>Formación académica</h2>
-      <?php for ($i = 0; $i < 2; $i++): ?>
-        <fieldset class="card" style="padding:var(--sp-2);margin-block:var(--sp-2);">
-          <legend>Estudio <?=($i+1)?></legend>
-          <div class="g-2">
-            <div class="field">
-              <label for="edu_title_<?=$i?>">Programa / Título</label>
-              <input id="edu_title_<?=$i?>" name="edu_title[]" type="text" placeholder="Ej: Tecnólogo en Logística" value="<?=htmlspecialchars($eduFormTitulos[$i] ?? '')?>"/>
+      <div id="edu-list" data-collection="edu">
+        <?php foreach ($eduFormTitulos as $i => $val): ?>
+          <fieldset class="card edu-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+            <legend data-num-label="Estudio">Estudio <?=($i+1)?></legend>
+            <?php if ($i > 0): ?>
+              <div class="field" style="display:flex;justify-content:flex-end;">
+                <button type="button" class="btn btn-ghost danger" data-remove-row=".edu-item">Eliminar estudio</button>
+              </div>
+            <?php endif; ?>
+            <div class="g-2">
+              <div class="field">
+                <label for="edu_title_<?=$i?>">Programa / Título</label>
+                <input id="edu_title_<?=$i?>" name="edu_title[]" type="text" placeholder="Ej: Tecnólogo en Logística" value="<?=htmlspecialchars($eduFormTitulos[$i] ?? '')?>"/>
+              </div>
+              <div class="field">
+                <label for="edu_institution_<?=$i?>">Institución</label>
+                <input id="edu_institution_<?=$i?>" name="edu_institution[]" type="text" placeholder="Ej: SENA" value="<?=htmlspecialchars($eduFormInstituciones[$i] ?? '')?>"/>
+              </div>
+            </div>
+            <div class="g-2">
+              <div class="field">
+                <label for="edu_period_<?=$i?>">Periodo</label>
+                <input id="edu_period_<?=$i?>" name="edu_period[]" type="text" placeholder="Ej: 2019-2021" value="<?=htmlspecialchars($eduFormPeriodos[$i] ?? '')?>"/>
+              </div>
             </div>
             <div class="field">
-              <label for="edu_institution_<?=$i?>">Institución</label>
-              <input id="edu_institution_<?=$i?>" name="edu_institution[]" type="text" placeholder="Ej: SENA" value="<?=htmlspecialchars($eduFormInstituciones[$i] ?? '')?>"/>
+              <label for="edu_desc_<?=$i?>">Descripción (opcional)</label>
+              <textarea id="edu_desc_<?=$i?>" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas."><?=htmlspecialchars($eduFormDescs[$i] ?? '')?></textarea>
             </div>
-          </div>
-          <div class="g-2">
             <div class="field">
-              <label for="edu_period_<?=$i?>">Periodo</label>
-              <input id="edu_period_<?=$i?>" name="edu_period[]" type="text" placeholder="Ej: 2019-2021" value="<?=htmlspecialchars($eduFormPeriodos[$i] ?? '')?>"/>
+              <label for="edu_proof_<?=$i?>">Soporte (certificado/imagen)</label>
+              <input id="edu_proof_<?=$i?>" name="edu_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+              <small class="muted">Opcional. Adjunta diploma, certificado o constancia.</small>
             </div>
-          </div>
-          <div class="field">
-            <label for="edu_desc_<?=$i?>">Descripción (opcional)</label>
-            <textarea id="edu_desc_<?=$i?>" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas."><?=htmlspecialchars($eduFormDescs[$i] ?? '')?></textarea>
-          </div>
-        </fieldset>
-      <?php endfor; ?>
+          </fieldset>
+        <?php endforeach; ?>
+      </div>
+      <button type="button" class="btn btn-add" data-add-row="#edu-template" data-target="#edu-list">Agregar estudio</button>
     </section>
 
     <section>
@@ -637,6 +781,96 @@ for ($i = 0; $i < 2; $i++) {
     <section>
       <label class="check"><input type="checkbox" name="acepta_datos" required /> <span>Acepto politicas de tratamiento de datos y <a href="#">terminos</a>. *</span></label>
     </section>
+
+    <template id="exp-template">
+      <fieldset class="card exp-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+        <legend data-num-label="Experiencia">Experiencia __NUM__</legend>
+        <div class="field" style="display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn-ghost danger" data-remove-row=".exp-item">Eliminar experiencia</button>
+        </div>
+        <div class="g-2">
+          <div class="field">
+            <label for="exp_role___INDEX__">Cargo / Rol</label>
+            <input id="exp_role___INDEX__" name="exp_role[]" type="text" placeholder="Ej: Auxiliar de Bodega"/>
+          </div>
+          <div class="field">
+            <label for="exp_company___INDEX__">Empresa / Entidad</label>
+            <input id="exp_company___INDEX__" name="exp_company[]" type="text" placeholder="Ej: Logisur"/>
+          </div>
+        </div>
+        <div class="g-3">
+          <div class="field">
+            <label for="exp_period___INDEX__">Periodo</label>
+            <input id="exp_period___INDEX__" name="exp_period[]" type="text" placeholder="Ej: 2023-2025"/>
+          </div>
+          <div class="field">
+            <label for="exp_years___INDEX__">Años de experiencia</label>
+            <input id="exp_years___INDEX__" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+          </div>
+        </div>
+        <div class="field">
+          <label for="exp_desc___INDEX__">Descripción</label>
+          <textarea id="exp_desc___INDEX__" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas…"></textarea>
+        </div>
+        <div class="field">
+          <label for="exp_proof___INDEX__">Soporte (PDF/Imagen)</label>
+          <input id="exp_proof___INDEX__" name="exp_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+          <small class="muted">Opcional. Se usará para validar la experiencia.</small>
+        </div>
+      </fieldset>
+    </template>
+
+    <template id="skill-template">
+      <div class="card skill-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+        <div class="g-3" style="align-items:end;">
+          <div class="field">
+            <label for="skill_name___INDEX__" data-num-label="Habilidad">Habilidad __NUM__</label>
+            <input id="skill_name___INDEX__" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL"/>
+          </div>
+          <div class="field">
+            <label for="skill_years___INDEX__">Años de experiencia</label>
+            <input id="skill_years___INDEX__" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+          </div>
+          <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <template id="edu-template">
+      <fieldset class="card edu-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+        <legend data-num-label="Estudio">Estudio __NUM__</legend>
+        <div class="field" style="display:flex;justify-content:flex-end;">
+          <button type="button" class="btn btn-ghost danger" data-remove-row=".edu-item">Eliminar estudio</button>
+        </div>
+        <div class="g-2">
+          <div class="field">
+            <label for="edu_title___INDEX__">Programa / Título</label>
+            <input id="edu_title___INDEX__" name="edu_title[]" type="text" placeholder="Ej: Tecnólogo en Logística"/>
+          </div>
+          <div class="field">
+            <label for="edu_institution___INDEX__">Institución</label>
+            <input id="edu_institution___INDEX__" name="edu_institution[]" type="text" placeholder="Ej: SENA"/>
+          </div>
+        </div>
+        <div class="g-2">
+          <div class="field">
+            <label for="edu_period___INDEX__">Periodo</label>
+            <input id="edu_period___INDEX__" name="edu_period[]" type="text" placeholder="Ej: 2019-2021"/>
+          </div>
+        </div>
+        <div class="field">
+          <label for="edu_desc___INDEX__">Descripción (opcional)</label>
+          <textarea id="edu_desc___INDEX__" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas."></textarea>
+        </div>
+        <div class="field">
+          <label for="edu_proof___INDEX__">Soporte (certificado/imagen)</label>
+          <input id="edu_proof___INDEX__" name="edu_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+          <small class="muted">Opcional. Adjunta diploma, certificado o constancia.</small>
+        </div>
+      </fieldset>
+    </template>
 
     <div class="actions">
       <button type="button" class="btn btn-secondary" onclick="history.back()">Cancelar</button>

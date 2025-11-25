@@ -150,8 +150,7 @@ function setupInstantValidation() {
 
   forms.forEach((form) => {
     const fields = Array.from(form.querySelectorAll('input, select, textarea'));
-
-    fields.forEach((field) => {
+    const attachField = (field) => {
       const onChange = () => validateField(field, { showRequired: false });
       field.addEventListener('input', onChange);
       field.addEventListener('blur', () => validateField(field, { showRequired: true }));
@@ -159,11 +158,15 @@ function setupInstantValidation() {
       if (field.type === 'file') {
         field.addEventListener('change', () => validateField(field, { showRequired: true }));
       }
-    });
+    };
+
+    fields.forEach(attachField);
+    form.__attachValidation = attachField;
 
     form.addEventListener('submit', (event) => {
       let firstInvalid = null;
-      fields.forEach((field) => {
+      const currentFields = Array.from(form.querySelectorAll('input, select, textarea'));
+      currentFields.forEach((field) => {
         const ok = validateField(field, { showRequired: true });
         if (!ok && !firstInvalid) {
           firstInvalid = field;
@@ -178,9 +181,124 @@ function setupInstantValidation() {
   });
 }
 
+function setupDynamicRepeater() {
+  const buttons = document.querySelectorAll('[data-add-row]');
+  if (!buttons.length) { return; }
+
+  const ensureCounter = (target) => {
+    if (!target.dataset.counter) {
+      target.dataset.counter = target.querySelectorAll('[data-index]').length.toString();
+    }
+  };
+
+  const reindexCollection = (target) => {
+    const items = Array.from(target.querySelectorAll('[data-index]'));
+    items.forEach((item, idx) => {
+      item.dataset.index = idx.toString();
+      const legend = item.querySelector('legend');
+      if (legend && legend.dataset.numLabel) {
+        legend.textContent = `${legend.dataset.numLabel} ${idx + 1}`;
+      } else if (legend) {
+        legend.textContent = legend.textContent.replace(/\d+$/, String(idx + 1));
+      }
+      item.querySelectorAll('[data-num-label]').forEach((el) => {
+        const base = el.dataset.numLabel || '';
+        el.textContent = `${base} ${idx + 1}`;
+      });
+      item.querySelectorAll('[id]').forEach((el) => {
+        const newId = el.id.replace(/_\d+$/, `_${idx}`);
+        if (newId !== el.id) {
+          const labels = Array.from((target.closest('form') || document).querySelectorAll(`label[for="${el.id}"]`));
+          labels.forEach((lbl) => lbl.setAttribute('for', newId));
+          el.id = newId;
+        }
+      });
+      item.querySelectorAll('label[for]').forEach((lbl) => {
+        const newFor = lbl.getAttribute('for')?.replace(/_\d+$/, `_${idx}`);
+        if (newFor) { lbl.setAttribute('for', newFor); }
+      });
+      // Oculta botones de eliminar en el primer elemento
+      item.querySelectorAll('[data-remove-row]').forEach((btn) => {
+        btn.style.display = idx === 0 ? 'none' : '';
+      });
+    });
+  };
+
+  buttons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tmplSel = btn.getAttribute('data-add-row');
+      const targetSel = btn.getAttribute('data-target');
+      const tmpl = tmplSel ? document.querySelector(tmplSel) : null;
+      const target = targetSel ? document.querySelector(targetSel) : null;
+      if (!tmpl || !target) { return; }
+
+      ensureCounter(target);
+      const nextIndex = Number(target.dataset.counter || '0');
+      target.dataset.counter = (nextIndex + 1).toString();
+      const html = tmpl.innerHTML.replace(/__INDEX__/g, String(nextIndex)).replace(/__NUM__/g, String(nextIndex + 1));
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = html.trim();
+      const node = wrapper.firstElementChild;
+      if (!node) { return; }
+      target.appendChild(node);
+
+      const form = btn.closest('form');
+      if (form && form.__attachValidation) {
+        node.querySelectorAll('input, select, textarea').forEach((el) => form.__attachValidation(el));
+      }
+      // Limpia posibles estados previos
+      node.querySelectorAll('.field-error').forEach((el) => el.remove());
+      node.querySelectorAll('.is-invalid').forEach((el) => el.classList.remove('is-invalid'));
+      node.querySelectorAll('.has-error').forEach((el) => el.classList.remove('has-error'));
+      reindexCollection(target);
+      target.dataset.counter = target.querySelectorAll('[data-index]').length.toString();
+    });
+  });
+
+  // Reindex inicial en contenedores existentes
+  document.querySelectorAll('[data-collection]').forEach((container) => {
+    ensureCounter(container);
+    const currentCount = container.querySelectorAll('[data-index]').length;
+    container.dataset.counter = currentCount.toString();
+    const renumber = () => {
+      reindexCollection(container);
+      container.dataset.counter = container.querySelectorAll('[data-index]').length.toString();
+    };
+    container.__renumber = renumber;
+    renumber();
+  });
+
+  // Expose reindexer
+  window.__reindexCollection = (target) => {
+    reindexCollection(target);
+    target.dataset.counter = target.querySelectorAll('[data-index]').length.toString();
+  };
+}
+
+function setupRemoveRow() {
+  document.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-remove-row]');
+    if (!btn) { return; }
+    const selector = btn.getAttribute('data-remove-row');
+    const item = selector ? btn.closest(selector) : null;
+    if (!item) { return; }
+    const container = item.closest('[data-collection]');
+    const siblings = container ? container.querySelectorAll(selector) : [];
+    if (siblings.length <= 1) { return; } // deja al menos uno
+    item.remove();
+    if (container && container.__renumber) {
+      container.__renumber();
+    } else if (container) {
+      window.__reindexCollection?.(container);
+    }
+  });
+}
+
 // Inicializacion
 window.addEventListener('DOMContentLoaded', () => {
   setupReveal();
   setupInstantValidation();
+  setupDynamicRepeater();
+  setupRemoveRow();
 });
 
