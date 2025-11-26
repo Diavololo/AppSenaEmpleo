@@ -21,6 +21,98 @@ if (!$sessionUser || ($sessionUser['type'] ?? '') !== 'persona') {
 
 require __DIR__.'/../pages/db.php';
 
+if (!function_exists('up_slug_from_email')) {
+  function up_slug_from_email(string $value): string {
+    $value = strtolower(trim($value));
+    $value = preg_replace('/[^a-z0-9]+/i', '-', $value);
+    $value = trim((string)$value, '-');
+    return $value !== '' ? $value : 'candidato';
+  }
+}
+
+if (!function_exists('up_ensure_directory')) {
+  function up_ensure_directory(string $path): void {
+    if (!is_dir($path) && !mkdir($path, 0775, true) && !is_dir($path)) {
+      throw new RuntimeException('No se pudo crear el directorio: '.$path);
+    }
+  }
+}
+
+if (!function_exists('up_collect_files')) {
+  /**
+   * @return array<int,array{error?:int,tmp_name?:string,name?:string,size?:int,type?:string}>
+   */
+  function up_collect_files(string $field): array {
+    $src = $_FILES[$field] ?? null;
+    if (!is_array($src) || !isset($src['name']) || !is_array($src['name'])) {
+      return [];
+    }
+    $files = [];
+    foreach (array_keys($src['name']) as $idx) {
+      $files[$idx] = [
+        'name' => $src['name'][$idx] ?? null,
+        'type' => $src['type'][$idx] ?? null,
+        'tmp_name' => $src['tmp_name'][$idx] ?? null,
+        'error' => $src['error'][$idx] ?? null,
+        'size' => $src['size'][$idx] ?? null,
+      ];
+    }
+    return $files;
+  }
+}
+
+if (!function_exists('up_store_upload')) {
+  /**
+   * @param array{error?:int,tmp_name?:string,name?:string,size?:int} $file
+   * @param array<string,string[]> $allowed
+   * @return array{absolute:string,relative:string,original:string,mime:string,size:int}
+   */
+  function up_store_upload(array $file, array $allowed, string $targetDir, string $publicPrefix, string $namePrefix, int $maxBytes): array {
+    $error = $file['error'] ?? UPLOAD_ERR_NO_FILE;
+    if ($error === UPLOAD_ERR_NO_FILE) {
+      throw new RuntimeException('No se recibio archivo.');
+    }
+    if ($error !== UPLOAD_ERR_OK) {
+      throw new RuntimeException('Error al subir archivo (codigo '.$error.').');
+    }
+    $tmp = $file['tmp_name'] ?? null;
+    if (!$tmp || !is_uploaded_file($tmp)) {
+      throw new RuntimeException('Carga de archivo invalida.');
+    }
+    $size = (int)($file['size'] ?? 0);
+    if ($size <= 0 || $size > $maxBytes) {
+      throw new RuntimeException('El archivo excede el tamano permitido ('.round($maxBytes / (1024*1024), 1).' MB).');
+    }
+    $original = basename($file['name'] ?? 'archivo');
+    $ext = strtolower(pathinfo($original, PATHINFO_EXTENSION));
+    if (!isset($allowed[$ext])) {
+      throw new RuntimeException('Extension no permitida: .'.$ext);
+    }
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mime = $finfo ? (finfo_file($finfo, $tmp) ?: '') : '';
+    if ($finfo) { finfo_close($finfo); }
+    if ($mime === '' || !in_array($mime, $allowed[$ext], true)) {
+      throw new RuntimeException('Tipo de archivo no permitido ('.$mime.').');
+    }
+    up_ensure_directory($targetDir);
+    $safePrefix = trim(preg_replace('/[^a-z0-9]+/i', '-', $namePrefix) ?? '', '-');
+    if ($safePrefix === '') { $safePrefix = 'archivo'; }
+    $filename = sprintf('%s-%s.%s', $safePrefix, bin2hex(random_bytes(6)), $ext);
+    $destination = $targetDir.DIRECTORY_SEPARATOR.$filename;
+    if (!move_uploaded_file($tmp, $destination)) {
+      throw new RuntimeException('No se pudo guardar el archivo.');
+    }
+    $relative = rtrim($publicPrefix, '/').'/'.$filename;
+    return [
+      'absolute' => $destination,
+      'relative' => str_replace(DIRECTORY_SEPARATOR, '/', $relative),
+      'original' => $original,
+      'mime'     => $mime,
+      'size'     => $size,
+    ];
+  }
+}
+
 if (!($pdo instanceof PDO)) {
   $_SESSION['flash_profile'] = 'No fue posible conectarse a la base de datos.';
   header('Location: index.php?view=perfil_publico');
@@ -99,11 +191,13 @@ $expEmp    = $_POST['exp_company'] ?? [];
 $expPeriod = $_POST['exp_period'] ?? [];
 $expYears  = $_POST['exp_years'] ?? [];
 $expDesc   = $_POST['exp_desc'] ?? [];
+$expFiles  = up_collect_files('exp_proof');
 
 $eduTitulos = $_POST['edu_title'] ?? [];
 $eduInst    = $_POST['edu_institution'] ?? [];
 $eduPeriod  = $_POST['edu_period'] ?? [];
 $eduDesc    = $_POST['edu_desc'] ?? [];
+$eduFiles   = up_collect_files('edu_proof');
 
 $snapshot = [
   'email'         => $newEmail,
@@ -121,6 +215,42 @@ $snapshot = [
 $existingDetailsStmt = $pdo->prepare('SELECT documento_tipo, documento_numero, pais, direccion, perfil, areas_interes FROM candidato_detalles WHERE email = ? LIMIT 1');
 $existingDetailsStmt->execute([$sessionUser['email'] ?? $oldEmail]);
 $existingDetails = $existingDetailsStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+// Directorios y configuracion de archivos
+$rootPath = dirname(__DIR__);
+$uploadsRoot = $rootPath.DIRECTORY_SEPARATOR.'uploads';
+up_ensure_directory($uploadsRoot);
+$slug = up_slug_from_email($newEmail);
+$personaBase = $uploadsRoot.DIRECTORY_SEPARATOR.'candidatos';
+up_ensure_directory($personaBase);
+$personaDir = $personaBase.DIRECTORY_SEPARATOR.$slug;
+up_ensure_directory($personaDir);
+$cvDir = $personaDir.DIRECTORY_SEPARATOR.'cv';
+$fotoDir = $personaDir.DIRECTORY_SEPARATOR.'foto';
+$expCertDir = $personaDir.DIRECTORY_SEPARATOR.'experiencias';
+$eduCertDir = $personaDir.DIRECTORY_SEPARATOR.'educacion';
+$publicBase = '/uploads/candidatos/'.$slug;
+$publicExpBase = $publicBase.'/experiencias';
+$publicEduBase = $publicBase.'/educacion';
+$cleanupFiles = [];
+$certAllowed = [
+  'pdf' => ['application/pdf'],
+  'doc' => ['application/msword', 'application/msword; charset=binary', 'application/vnd.ms-office', 'application/octet-stream'],
+  'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  'png' => ['image/png'],
+  'jpg' => ['image/jpeg'],
+  'jpeg' => ['image/jpeg'],
+];
+$cvAllowed = [
+  'pdf' => ['application/pdf'],
+  'doc' => ['application/msword', 'application/msword; charset=binary', 'application/vnd.ms-office', 'application/octet-stream'],
+  'docx' => ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+];
+$imgAllowed = [
+  'png' => ['image/png'],
+  'jpg' => ['image/jpeg'],
+  'jpeg' => ['image/jpeg'],
+];
 
 $pdo->beginTransaction();
 
@@ -197,6 +327,36 @@ try {
     ':email'         => $newEmail,
   ]);
 
+  // Manejo de CV y foto opcionales
+  $cvDocId = null;
+  if (isset($_FILES['cv']) && ($_FILES['cv']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+    $cvInfo = up_store_upload($_FILES['cv'], $cvAllowed, $cvDir, $publicBase.'/cv', 'cv', 5 * 1024 * 1024);
+    $cleanupFiles[] = $cvInfo['absolute'];
+    $docStmt = $pdo->prepare('INSERT INTO candidato_documentos (email, tipo, nombre_archivo, ruta, mime, tamano) VALUES (?,?,?,?,?,?)');
+    $docStmt->execute([
+      $newEmail,
+      'cv',
+      $cvInfo['original'],
+      $cvInfo['relative'],
+      $cvInfo['mime'],
+      $cvInfo['size'],
+    ]);
+    $cvDocId = (int)$pdo->lastInsertId();
+    $pdo->prepare('UPDATE candidato_detalles SET cv_documento_id = ? WHERE email = ?')->execute([$cvDocId, $newEmail]);
+  }
+
+  if (isset($_FILES['foto']) && ($_FILES['foto']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+    $fotoInfo = up_store_upload($_FILES['foto'], $imgAllowed, $fotoDir, $publicBase.'/foto', 'foto', 3 * 1024 * 1024);
+    $cleanupFiles[] = $fotoInfo['absolute'];
+    $pdo->prepare('UPDATE candidato_detalles SET foto_nombre = ?, foto_ruta = ?, foto_mime = ?, foto_tamano = ? WHERE email = ?')->execute([
+      $fotoInfo['original'],
+      $fotoInfo['relative'],
+      $fotoInfo['mime'],
+      $fotoInfo['size'],
+      $newEmail,
+    ]);
+  }
+
   // Actualiza resumen y habilidades libres en candidato_perfil si existe
   $perfilUpdate = $pdo->prepare(
     'UPDATE candidato_perfil
@@ -209,6 +369,11 @@ try {
     ':habilidades' => $areasInteres !== '' ? $areasInteres : null,
     ':email'       => $newEmail,
   ]);
+
+  // Limpia certificados previos
+  $pdo->prepare('DELETE FROM candidato_experiencia_certificados WHERE experiencia_id IN (SELECT id FROM candidato_experiencias WHERE email = ?)')->execute([$newEmail]);
+  $pdo->prepare('DELETE FROM candidato_educacion_certificados WHERE educacion_id IN (SELECT id FROM candidato_educacion WHERE email = ?)')->execute([$newEmail]);
+  $pdo->prepare('DELETE FROM candidato_documentos WHERE email = ? AND tipo = "certificado"')->execute([$newEmail]);
 
   // Actualiza habilidades
   $pdo->prepare('DELETE FROM candidato_habilidades WHERE email = ?')->execute([$newEmail]);
@@ -235,6 +400,8 @@ try {
     'INSERT INTO candidato_experiencias (email, cargo, empresa, periodo, anios_experiencia, descripcion, orden)
      VALUES (:email, :cargo, :empresa, :periodo, :anios, :descripcion, :orden)'
   );
+  $expCertInsert = $pdo->prepare('INSERT INTO candidato_experiencia_certificados (experiencia_id, documento_id) VALUES (?,?)');
+  $docInsert = $pdo->prepare('INSERT INTO candidato_documentos (email, tipo, nombre_archivo, ruta, mime, tamano) VALUES (?,?,?,?,?,?)');
   $expCount = max(count($expRoles), count($expEmp), count($expPeriod), count($expYears), count($expDesc));
   $order = 1;
   for ($i = 0; $i < $expCount; $i++) {
@@ -255,6 +422,14 @@ try {
       ':descripcion' => $desc !== '' ? $desc : null,
       ':orden'       => $order++,
     ]);
+    $expId = (int)$pdo->lastInsertId();
+    $file = $expFiles[$i] ?? null;
+    if (is_array($file) && (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE)) {
+      $up = up_store_upload($file, $certAllowed, $expCertDir, $publicExpBase, 'exp-'.$i, 5 * 1024 * 1024);
+      $cleanupFiles[] = $up['absolute'];
+      $docInsert->execute([$newEmail, 'certificado', $up['original'], $up['relative'], $up['mime'], $up['size']]);
+      $expCertInsert->execute([$expId, (int)$pdo->lastInsertId()]);
+    }
   }
 
   // Actualiza educacion
@@ -263,6 +438,7 @@ try {
     'INSERT INTO candidato_educacion (email, titulo, institucion, periodo, descripcion, orden)
      VALUES (:email, :titulo, :institucion, :periodo, :descripcion, :orden)'
   );
+  $eduCertInsert = $pdo->prepare('INSERT INTO candidato_educacion_certificados (educacion_id, documento_id) VALUES (?,?)');
   $eduCount = max(count($eduTitulos), count($eduInst), count($eduPeriod), count($eduDesc));
   $order = 1;
   for ($i = 0; $i < $eduCount; $i++) {
@@ -281,6 +457,14 @@ try {
       ':descripcion' => $desc !== '' ? $desc : null,
       ':orden'       => $order++,
     ]);
+    $eduId = (int)$pdo->lastInsertId();
+    $file = $eduFiles[$i] ?? null;
+    if (is_array($file) && (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE)) {
+      $up = up_store_upload($file, $certAllowed, $eduCertDir, $publicEduBase, 'edu-'.$i, 5 * 1024 * 1024);
+      $cleanupFiles[] = $up['absolute'];
+      $docInsert->execute([$newEmail, 'certificado', $up['original'], $up['relative'], $up['mime'], $up['size']]);
+      $eduCertInsert->execute([$eduId, (int)$pdo->lastInsertId()]);
+    }
   }
 
   $pdo->commit();

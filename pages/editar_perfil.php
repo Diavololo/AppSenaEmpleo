@@ -85,20 +85,9 @@ $form = [
   'logros'           => '',
 ];
 
-$skills = array_fill(0, 3, ['nombre' => '', 'anios' => '']);
-$experiencias = array_fill(0, 2, [
-  'cargo' => '',
-  'empresa' => '',
-  'periodo' => '',
-  'anios' => '',
-  'descripcion' => '',
-]);
-$educacion = array_fill(0, 2, [
-  'titulo' => '',
-  'institucion' => '',
-  'periodo' => '',
-  'descripcion' => '',
-]);
+$skills = [];
+$experiencias = [];
+$educacion = [];
 
 $fotoActual = null;
 $cvActual = null;
@@ -188,47 +177,68 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
   }
 
   try {
-    $skillStmt = $pdo->prepare('SELECT nombre, anios_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anios_experiencia DESC, nombre ASC LIMIT 3');
+    $skillStmt = $pdo->prepare('SELECT nombre, anios_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anios_experiencia DESC, nombre ASC');
     $skillStmt->execute([$candidateEmail]);
-    $idx = 0;
-    while ($skill = $skillStmt->fetch(PDO::FETCH_ASSOC)) {
-      if (!isset($skills[$idx])) { break; }
-      $skills[$idx]['nombre'] = trim((string)$skill['nombre']);
-      $skills[$idx]['anios'] = ep_format_years($skill['anios_experiencia'] ?? null);
-      $idx++;
+    foreach ($skillStmt->fetchAll(PDO::FETCH_ASSOC) as $skill) {
+      $skills[] = [
+        'nombre' => trim((string)$skill['nombre']),
+        'anios'  => ep_format_years($skill['anios_experiencia'] ?? null),
+      ];
     }
   } catch (Throwable $e) {
     error_log('[editar_perfil] candidato_habilidades: '.$e->getMessage());
   }
 
   try {
-    $expStmt = $pdo->prepare('SELECT cargo, empresa, periodo, anios_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC LIMIT 2');
+    $expCertMap = [];
+    $certStmt = $pdo->prepare('SELECT c.experiencia_id, d.nombre_archivo, d.ruta FROM candidato_experiencia_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE d.email = ?');
+    $certStmt->execute([$candidateEmail]);
+    foreach ($certStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $expCertMap[(int)$row['experiencia_id']] = [
+        'nombre' => (string)$row['nombre_archivo'],
+        'ruta'   => (string)$row['ruta'],
+      ];
+    }
+
+    $expStmt = $pdo->prepare('SELECT id, cargo, empresa, periodo, anios_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC');
     $expStmt->execute([$candidateEmail]);
-    $idx = 0;
-    while ($exp = $expStmt->fetch(PDO::FETCH_ASSOC)) {
-      if (!isset($experiencias[$idx])) { break; }
-      $experiencias[$idx]['cargo'] = trim((string)$exp['cargo']);
-      $experiencias[$idx]['empresa'] = trim((string)$exp['empresa']);
-      $experiencias[$idx]['periodo'] = trim((string)$exp['periodo']);
-      $experiencias[$idx]['anios'] = ep_format_years($exp['anios_experiencia'] ?? null);
-      $experiencias[$idx]['descripcion'] = trim((string)$exp['descripcion']);
-      $idx++;
+    foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
+      $expId = (int)$exp['id'];
+      $experiencias[] = [
+        'cargo' => trim((string)$exp['cargo']),
+        'empresa' => trim((string)$exp['empresa']),
+        'periodo' => trim((string)$exp['periodo']),
+        'anios' => ep_format_years($exp['anios_experiencia'] ?? null),
+        'descripcion' => trim((string)$exp['descripcion']),
+        'soporte' => $expCertMap[$expId] ?? null,
+      ];
     }
   } catch (Throwable $e) {
     error_log('[editar_perfil] candidato_experiencias: '.$e->getMessage());
   }
 
   try {
-    $eduStmt = $pdo->prepare('SELECT titulo, institucion, periodo, descripcion FROM candidato_educacion WHERE email = ? ORDER BY orden ASC, created_at ASC LIMIT 2');
+    $eduCertMap = [];
+    $certEduStmt = $pdo->prepare('SELECT c.educacion_id, d.nombre_archivo, d.ruta FROM candidato_educacion_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE d.email = ?');
+    $certEduStmt->execute([$candidateEmail]);
+    foreach ($certEduStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $eduCertMap[(int)$row['educacion_id']] = [
+        'nombre' => (string)$row['nombre_archivo'],
+        'ruta'   => (string)$row['ruta'],
+      ];
+    }
+
+    $eduStmt = $pdo->prepare('SELECT id, titulo, institucion, periodo, descripcion FROM candidato_educacion WHERE email = ? ORDER BY orden ASC, created_at ASC');
     $eduStmt->execute([$candidateEmail]);
-    $idx = 0;
-    while ($edu = $eduStmt->fetch(PDO::FETCH_ASSOC)) {
-      if (!isset($educacion[$idx])) { break; }
-      $educacion[$idx]['titulo'] = trim((string)$edu['titulo']);
-      $educacion[$idx]['institucion'] = trim((string)$edu['institucion']);
-      $educacion[$idx]['periodo'] = trim((string)$edu['periodo']);
-      $educacion[$idx]['descripcion'] = trim((string)$edu['descripcion']);
-      $idx++;
+    foreach ($eduStmt->fetchAll(PDO::FETCH_ASSOC) as $edu) {
+      $eduId = (int)$edu['id'];
+      $educacion[] = [
+        'titulo' => trim((string)$edu['titulo']),
+        'institucion' => trim((string)$edu['institucion']),
+        'periodo' => trim((string)$edu['periodo']),
+        'descripcion' => trim((string)$edu['descripcion']),
+        'soporte' => $eduCertMap[$eduId] ?? null,
+      ];
     }
   } catch (Throwable $e) {
     error_log('[editar_perfil] candidato_educacion: '.$e->getMessage());
@@ -247,6 +257,10 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
 
 $flash = $_SESSION['flash_edit_profile'] ?? null;
 unset($_SESSION['flash_edit_profile']);
+
+if (!$skills) { $skills = [['nombre' => '', 'anios' => '']]; }
+if (!$experiencias) { $experiencias = [['cargo'=>'','empresa'=>'','periodo'=>'','anios'=>'','descripcion'=>'','soporte'=>null]]; }
+if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','descripcion'=>'','soporte'=>null]]; }
 ?>
 
 <section class="section">
@@ -282,7 +296,7 @@ unset($_SESSION['flash_edit_profile']);
       </div>
     </div>
 
-    <form class="card form" method="post" action="index.php?action=update_profile" enctype="multipart/form-data" novalidate>
+    <form class="card form" method="post" action="index.php?action=update_profile" enctype="multipart/form-data" data-validate="instant" novalidate>
       <input type="hidden" name="csrf" value="<?=ep_e($csrf); ?>" />
 
       <section>
@@ -394,83 +408,213 @@ unset($_SESSION['flash_edit_profile']);
 
       <section>
         <h2>Habilidades y experiencia</h2>
-        <p class="muted">Actualiza hasta tres habilidades clave con sus años de experiencia.</p>
-        <?php for ($i = 0; $i < 3; $i++): ?>
-          <div class="g-3">
-            <div class="field">
-              <label for="skill_name_<?=$i; ?>">Habilidad <?=($i + 1); ?></label>
-              <input id="skill_name_<?=$i; ?>" name="skill_name[]" type="text" value="<?=ep_e($skills[$i]['nombre']); ?>" placeholder="Ej: Laravel" />
+        <p class="muted">Agrega habilidades clave y años de experiencia. Puedes sumar o quitar según necesites.</p>
+        <div id="skill-list" data-collection="skill">
+          <?php foreach ($skills as $i => $skill): ?>
+            <div class="card skill-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+              <div class="g-3" style="align-items:end;">
+                <div class="field">
+                  <label for="skill_name_<?=$i?>" data-num-label="Habilidad">Habilidad <?=($i+1)?></label>
+                  <input id="skill_name_<?=$i?>" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL" value="<?=ep_e($skill['nombre']); ?>"/>
+                </div>
+                <div class="field">
+                  <label for="skill_years_<?=$i?>">Años de experiencia</label>
+                  <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($skill['anios']); ?>"/>
+                </div>
+                <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
+                  <?php if ($i > 0): ?><button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button><?php endif; ?>
+                </div>
+              </div>
             </div>
-            <div class="field">
-              <label for="skill_years_<?=$i; ?>">Años de experiencia</label>
-              <input id="skill_years_<?=$i; ?>" name="skill_years[]" type="number" step="0.5" min="0" value="<?=ep_e($skills[$i]['anios']); ?>" placeholder="Ej: 2" />
-            </div>
-          </div>
-        <?php endfor; ?>
+          <?php endforeach; ?>
+        </div>
+        <button type="button" class="btn btn-add" data-add-row="#skill-template" data-target="#skill-list">Agregar habilidad</button>
       </section>
 
       <section>
         <h2>Experiencia profesional</h2>
-        <p class="muted">Puedes registrar dos experiencias destacadas. Deja en blanco las que no apliquen.</p>
-        <?php for ($i = 0; $i < 2; $i++): ?>
-          <fieldset class="card" style="padding:var(--sp-3); margin-block:var(--sp-2);">
-            <legend>Experiencia <?=($i + 1); ?></legend>
-            <div class="g-2">
-              <div class="field">
-                <label for="exp_role_<?=$i; ?>">Cargo</label>
-                <input id="exp_role_<?=$i; ?>" name="exp_role[]" type="text" value="<?=ep_e($experiencias[$i]['cargo']); ?>" placeholder="Ej: Auxiliar de Bodega" />
+        <p class="muted">Agrega tus experiencias (laborales, voluntariado, prácticas) y un soporte opcional para cada una.</p>
+        <div id="exp-list" data-collection="exp">
+          <?php foreach ($experiencias as $i => $exp): ?>
+            <fieldset class="card exp-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+              <legend data-num-label="Experiencia">Experiencia <?=($i+1)?></legend>
+              <?php if ($i > 0): ?>
+                <div class="field" style="display:flex;justify-content:flex-end;">
+                  <button type="button" class="btn btn-ghost danger" data-remove-row=".exp-item">Eliminar experiencia</button>
+                </div>
+              <?php endif; ?>
+              <div class="g-2">
+                <div class="field">
+                  <label for="exp_role_<?=$i?>">Cargo / Rol</label>
+                  <input id="exp_role_<?=$i?>" name="exp_role[]" type="text" placeholder="Ej: Auxiliar de Bodega" value="<?=ep_e($exp['cargo']); ?>"/>
+                </div>
+                <div class="field">
+                  <label for="exp_company_<?=$i?>">Empresa / Entidad</label>
+                  <input id="exp_company_<?=$i?>" name="exp_company[]" type="text" placeholder="Ej: Logisur" value="<?=ep_e($exp['empresa']); ?>"/>
+                </div>
+              </div>
+              <div class="g-3">
+                <div class="field">
+                  <label for="exp_period_<?=$i?>">Periodo</label>
+                  <input id="exp_period_<?=$i?>" name="exp_period[]" type="text" placeholder="Ej: 2023-2025" value="<?=ep_e($exp['periodo']); ?>"/>
+                </div>
+                <div class="field">
+                  <label for="exp_years_<?=$i?>">Años de experiencia</label>
+                  <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($exp['anios']); ?>"/>
+                </div>
               </div>
               <div class="field">
-                <label for="exp_company_<?=$i; ?>">Empresa / Entidad</label>
-                <input id="exp_company_<?=$i; ?>" name="exp_company[]" type="text" value="<?=ep_e($experiencias[$i]['empresa']); ?>" placeholder="Ej: Logisur" />
-              </div>
-            </div>
-            <div class="g-3">
-              <div class="field">
-                <label for="exp_period_<?=$i; ?>">Periodo</label>
-                <input id="exp_period_<?=$i; ?>" name="exp_period[]" type="text" value="<?=ep_e($experiencias[$i]['periodo']); ?>" placeholder="Ej: 2023-2025" />
+                <label for="exp_desc_<?=$i?>">Descripción</label>
+                <textarea id="exp_desc_<?=$i?>" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas"><?=ep_e($exp['descripcion']); ?></textarea>
               </div>
               <div class="field">
-                <label for="exp_years_<?=$i; ?>">Años de experiencia</label>
-                <input id="exp_years_<?=$i; ?>" name="exp_years[]" type="number" step="0.5" min="0" value="<?=ep_e($experiencias[$i]['anios']); ?>" placeholder="Ej: 2" />
+                <label for="exp_proof_<?=$i?>">Soporte (PDF/Imagen)</label>
+                <?php if (!empty($exp['soporte']['ruta'])): ?>
+                  <p class="muted m-0">Actual: <a class="link" href="<?=ep_e($exp['soporte']['ruta']); ?>" target="_blank" rel="noopener"><?=ep_e($exp['soporte']['nombre'] ?? 'Soporte'); ?></a></p>
+                <?php endif; ?>
+                <input id="exp_proof_<?=$i?>" name="exp_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                <small class="muted">Opcional. Se usará para validar la experiencia.</small>
               </div>
-            </div>
-            <div class="field">
-              <label for="exp_desc_<?=$i; ?>">Descripción</label>
-              <textarea id="exp_desc_<?=$i; ?>" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas"><?=ep_e($experiencias[$i]['descripcion']); ?></textarea>
-            </div>
-          </fieldset>
-        <?php endfor; ?>
+            </fieldset>
+          <?php endforeach; ?>
+        </div>
+        <button type="button" class="btn btn-add" data-add-row="#exp-template" data-target="#exp-list">Agregar experiencia</button>
       </section>
 
       <section>
         <h2>Formación académica</h2>
-        <?php for ($i = 0; $i < 2; $i++): ?>
-          <fieldset class="card" style="padding:var(--sp-3); margin-block:var(--sp-2);">
-            <legend>Estudio <?=($i + 1); ?></legend>
-            <div class="g-2">
-              <div class="field">
-                <label for="edu_title_<?=$i; ?>">Programa / Título</label>
-                <input id="edu_title_<?=$i; ?>" name="edu_title[]" type="text" value="<?=ep_e($educacion[$i]['titulo']); ?>" placeholder="Ej: Tecnólogo en Logística" />
+        <div id="edu-list" data-collection="edu">
+          <?php foreach ($educacion as $i => $edu): ?>
+            <fieldset class="card edu-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
+              <legend data-num-label="Estudio">Estudio <?=($i+1)?></legend>
+              <?php if ($i > 0): ?>
+                <div class="field" style="display:flex;justify-content:flex-end;">
+                  <button type="button" class="btn btn-ghost danger" data-remove-row=".edu-item">Eliminar estudio</button>
+                </div>
+              <?php endif; ?>
+              <div class="g-2">
+                <div class="field">
+                  <label for="edu_title_<?=$i?>">Programa / Título</label>
+                  <input id="edu_title_<?=$i?>" name="edu_title[]" type="text" placeholder="Ej: Tecnólogo en Logística" value="<?=ep_e($edu['titulo']); ?>"/>
+                </div>
+                <div class="field">
+                  <label for="edu_institution_<?=$i?>">Institución</label>
+                  <input id="edu_institution_<?=$i?>" name="edu_institution[]" type="text" placeholder="Ej: SENA" value="<?=ep_e($edu['institucion']); ?>"/>
+                </div>
+              </div>
+              <div class="g-2">
+                <div class="field">
+                  <label for="edu_period_<?=$i?>">Periodo</label>
+                  <input id="edu_period_<?=$i?>" name="edu_period[]" type="text" placeholder="Ej: 2019-2021" value="<?=ep_e($edu['periodo']); ?>"/>
+                </div>
               </div>
               <div class="field">
-                <label for="edu_institution_<?=$i; ?>">Institución</label>
-                <input id="edu_institution_<?=$i; ?>" name="edu_institution[]" type="text" value="<?=ep_e($educacion[$i]['institucion']); ?>" placeholder="Ej: SENA" />
+                <label for="edu_desc_<?=$i?>">Descripción (opcional)</label>
+                <textarea id="edu_desc_<?=$i?>" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas."><?=ep_e($edu['descripcion']); ?></textarea>
               </div>
-            </div>
-            <div class="g-2">
               <div class="field">
-                <label for="edu_period_<?=$i; ?>">Periodo</label>
-                <input id="edu_period_<?=$i; ?>" name="edu_period[]" type="text" value="<?=ep_e($educacion[$i]['periodo']); ?>" placeholder="Ej: 2019-2021" />
+                <label for="edu_proof_<?=$i?>">Soporte (certificado/imagen)</label>
+                <?php if (!empty($edu['soporte']['ruta'])): ?>
+                  <p class="muted m-0">Actual: <a class="link" href="<?=ep_e($edu['soporte']['ruta']); ?>" target="_blank" rel="noopener"><?=ep_e($edu['soporte']['nombre'] ?? 'Soporte'); ?></a></p>
+                <?php endif; ?>
+                <input id="edu_proof_<?=$i?>" name="edu_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                <small class="muted">Opcional. Adjunta diploma, certificado o constancia.</small>
               </div>
+            </fieldset>
+          <?php endforeach; ?>
+        </div>
+        <button type="button" class="btn btn-add" data-add-row="#edu-template" data-target="#edu-list">Agregar estudio</button>
+      </section>
+
+      <template id="skill-template">
+        <div class="card skill-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+          <div class="g-3" style="align-items:end;">
+            <div class="field">
+              <label for="skill_name___INDEX__" data-num-label="Habilidad">Habilidad __NUM__</label>
+              <input id="skill_name___INDEX__" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL"/>
             </div>
             <div class="field">
-              <label for="edu_desc_<?=$i; ?>">Descripción (opcional)</label>
-              <textarea id="edu_desc_<?=$i; ?>" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas"><?=ep_e($educacion[$i]['descripcion']); ?></textarea>
+              <label for="skill_years___INDEX__">Años de experiencia</label>
+              <input id="skill_years___INDEX__" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
             </div>
-          </fieldset>
-        <?php endfor; ?>
-      </section>
+            <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
+              <button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <template id="exp-template">
+        <fieldset class="card exp-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+          <legend data-num-label="Experiencia">Experiencia __NUM__</legend>
+          <div class="field" style="display:flex;justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost danger" data-remove-row=".exp-item">Eliminar experiencia</button>
+          </div>
+          <div class="g-2">
+            <div class="field">
+              <label for="exp_role___INDEX__">Cargo / Rol</label>
+              <input id="exp_role___INDEX__" name="exp_role[]" type="text" placeholder="Ej: Auxiliar de Bodega"/>
+            </div>
+            <div class="field">
+              <label for="exp_company___INDEX__">Empresa / Entidad</label>
+              <input id="exp_company___INDEX__" name="exp_company[]" type="text" placeholder="Ej: Logisur"/>
+            </div>
+          </div>
+          <div class="g-3">
+            <div class="field">
+              <label for="exp_period___INDEX__">Periodo</label>
+              <input id="exp_period___INDEX__" name="exp_period[]" type="text" placeholder="Ej: 2023-2025"/>
+            </div>
+            <div class="field">
+              <label for="exp_years___INDEX__">Años de experiencia</label>
+              <input id="exp_years___INDEX__" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+            </div>
+          </div>
+          <div class="field">
+            <label for="exp_desc___INDEX__">Descripción</label>
+            <textarea id="exp_desc___INDEX__" name="exp_desc[]" rows="3" placeholder="Principales responsabilidades, logros, herramientas"></textarea>
+          </div>
+          <div class="field">
+            <label for="exp_proof___INDEX__">Soporte (PDF/Imagen)</label>
+            <input id="exp_proof___INDEX__" name="exp_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+            <small class="muted">Opcional. Se usará para validar la experiencia.</small>
+          </div>
+        </fieldset>
+      </template>
+
+      <template id="edu-template">
+        <fieldset class="card edu-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="__INDEX__">
+          <legend data-num-label="Estudio">Estudio __NUM__</legend>
+          <div class="field" style="display:flex;justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost danger" data-remove-row=".edu-item">Eliminar estudio</button>
+          </div>
+          <div class="g-2">
+            <div class="field">
+              <label for="edu_title___INDEX__">Programa / Título</label>
+              <input id="edu_title___INDEX__" name="edu_title[]" type="text" placeholder="Ej: Tecnólogo en Logística"/>
+            </div>
+            <div class="field">
+              <label for="edu_institution___INDEX__">Institución</label>
+              <input id="edu_institution___INDEX__" name="edu_institution[]" type="text" placeholder="Ej: SENA"/>
+            </div>
+          </div>
+          <div class="g-2">
+            <div class="field">
+              <label for="edu_period___INDEX__">Periodo</label>
+              <input id="edu_period___INDEX__" name="edu_period[]" type="text" placeholder="Ej: 2019-2021"/>
+            </div>
+          </div>
+          <div class="field">
+            <label for="edu_desc___INDEX__">Descripción (opcional)</label>
+            <textarea id="edu_desc___INDEX__" name="edu_desc[]" rows="2" placeholder="Logros, énfasis o actividades destacadas."></textarea>
+          </div>
+          <div class="field">
+            <label for="edu_proof___INDEX__">Soporte (certificado/imagen)</label>
+            <input id="edu_proof___INDEX__" name="edu_proof[]" type="file" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+            <small class="muted">Opcional. Adjunta diploma, certificado o constancia.</small>
+          </div>
+        </fieldset>
+      </template>
 
       <section>
         <h2>Otros datos</h2>
@@ -522,11 +666,11 @@ unset($_SESSION['flash_edit_profile']);
         </div>
       </section>
 
-      <section>
-        <h2>Hoja de vida</h2>
-        <div class="g-2">
-          <div class="dropzone">
-            <label for="cv">Actualizar CV (PDF/DOC)</label>
+    <section>
+      <h2>Hoja de vida</h2>
+      <div class="g-2">
+        <div class="dropzone">
+          <label for="cv">Actualizar CV (PDF/DOC)</label>
             <?php if ($cvActual): ?>
               <p class="muted m-0">Actual: <a class="link" href="<?=ep_e($cvActual['ruta']); ?>" target="_blank" rel="noopener"><?=ep_e($cvActual['nombre_archivo']); ?></a></p>
             <?php endif; ?>
