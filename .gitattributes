@@ -1,0 +1,2 @@
+* text=auto
+# LFS deshabilitado para los archivos de código; solo añade reglas aquí si realmente necesitas LFS para binarios grandes.
