@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: bolsa-empleo-sena
+    env: docker
+    plan: free
+    branch: main
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
