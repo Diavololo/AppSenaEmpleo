@@ -10,6 +10,11 @@ if (!$userSession || ($userSession['type'] ?? '') !== 'persona') {
 }
 
 require __DIR__.'/db.php';
+// Cliente OpenAI para calcular match si no hay score guardado
+$openaiClientFile = dirname(__DIR__).'/lib/OpenAIClient.php';
+if (is_file($openaiClientFile)) {
+  require_once $openaiClientFile;
+}
 
 if (!function_exists('mp_e')) {
   function mp_e(?string $value): string {
@@ -136,13 +141,173 @@ if (!function_exists('mp_build_steps')) {
   }
 }
 
+if (!function_exists('mp_ai_norm')) {
+  function mp_ai_norm(array $vector): float {
+    $sum = 0.0;
+    foreach ($vector as $v) { $sum += $v * $v; }
+    return sqrt($sum);
+  }
+}
+
+if (!function_exists('mp_ai_cosine')) {
+  function mp_ai_cosine(array $a, float $normA, array $b, float $normB): float {
+    if ($normA <= 0.0 || $normB <= 0.0) { return 0.0; }
+    $len = min(count($a), count($b));
+    $dot = 0.0;
+    for ($i = 0; $i < $len; $i++) { $dot += $a[$i] * $b[$i]; }
+    return $dot / ($normA * $normB);
+  }
+}
+
+if (!function_exists('mp_ai_required_years')) {
+  function mp_ai_required_years(string $text): ?int {
+    if (preg_match('/(\\d+)\\s*(?:anos|anios)/i', $text, $m)) {
+      return (int)$m[1];
+    }
+    return null;
+  }
+}
+
+if (!function_exists('mp_ai_skill_overlap')) {
+  function mp_ai_skill_overlap(array $candSkills, array $vacTags): int {
+    $cand = array_filter(array_map(static fn($v) => mb_strtolower(trim((string)$v), 'UTF-8'), $candSkills));
+    $vac  = array_filter(array_map(static fn($v) => mb_strtolower(trim((string)$v), 'UTF-8'), $vacTags));
+    $cand = array_values(array_unique($cand));
+    $vac  = array_values(array_unique($vac));
+    if (!$cand || !$vac) { return 20; }
+    $common = array_intersect($cand, $vac);
+    $max = max(count($cand), count($vac));
+    if ($max === 0) { return 20; }
+    return (int)round(count($common) / $max * 100);
+  }
+}
+
+if (!function_exists('mp_ai_exp_score')) {
+  function mp_ai_exp_score(?int $required, ?int $candYears): int {
+    if ($required === null || $required <= 0 || $candYears === null) { return 20; }
+    if ($candYears >= $required) { return 100; }
+    return (int)round(max(0, ($candYears / $required) * 100));
+  }
+}
+
+if (!function_exists('mp_ai_weights')) {
+  function mp_ai_weights(): array {
+    return ['embed' => 0.6, 'skills' => 0.3, 'exp' => 0.1];
+  }
+}
+
+if (!function_exists('mp_ai_clean_skills')) {
+  /**
+   * @param array<int,string>|string|null $skills
+   * @return string[]
+   */
+  function mp_ai_clean_skills($skills): array {
+    if (is_string($skills)) {
+      $skills = preg_split('/[,;|]+/', $skills) ?: [];
+    }
+    if (!is_array($skills)) { return []; }
+    $out = [];
+    foreach ($skills as $skill) {
+      $s = trim((string)$skill);
+      if ($s === '') { continue; }
+      $s = preg_replace('/\\s*[·•]\\s*\\d+.*/u', '', $s);
+      $s = preg_replace('/\\d+\\s*(anos|anios|años)?/iu', '', $s);
+      $s = preg_replace('/\\s+anos?|\\s+anios?/iu', '', $s);
+      $s = trim(preg_replace('/\\s+/', ' ', (string)$s));
+      if ($s === '') { continue; }
+      $out[] = $s;
+    }
+    return array_values(array_unique($out));
+  }
+}
+
+if (!function_exists('mp_ai_profile_text')) {
+  /**
+   * @param array<string,mixed> $profile
+   */
+  function mp_ai_profile_text(array $profile): string {
+    $parts = array_filter([
+      'Rol deseado: '.($profile['rol'] ?? ''),
+      'Nivel: '.($profile['nivel'] ?? ''),
+      'Ciudad: '.($profile['ciudad'] ?? ''),
+      'Modalidad: '.($profile['modalidad'] ?? ''),
+      'Disponibilidad: '.($profile['disponibilidad'] ?? ''),
+      'Resumen: '.($profile['resumen'] ?? ''),
+      $profile['habilidades'] ? 'Habilidades: '.implode(', ', (array)$profile['habilidades']) : null,
+    ]);
+    return implode("\n", $parts);
+  }
+}
+
 $chips = [];
 $postulaciones = [];
 $kpis = ['activas' => 0, 'entrevistas' => 0, 'ofertas' => 0, 'no_seleccion' => 0];
 $upcomingEvents = [];
 $email = $userSession['email'] ?? null;
 
+$aiVec = null;
+$aiNorm = 0.0;
+$aiError = null;
+$candSkillsGlobal = [];
+$candSkillsGlobalClean = [];
+
 if ($pdo instanceof PDO && $email) {
+  // Carga perfil del candidato para embedding (opcional)
+  try {
+    $profStmt = $pdo->prepare(
+      'SELECT c.ciudad,
+              cd.perfil AS resumen, cd.areas_interes,
+              cp.rol_deseado, cp.habilidades,
+              a.nombre AS area_nombre,
+              n.nombre AS nivel_nombre,
+              m.nombre AS modalidad_nombre,
+              d.nombre AS disponibilidad_nombre
+       FROM candidatos c
+       LEFT JOIN candidato_detalles cd ON cd.email = c.email
+       LEFT JOIN candidato_perfil cp ON cp.email = c.email
+       LEFT JOIN areas a ON a.id = cp.area_id
+       LEFT JOIN niveles n ON n.id = cp.nivel_id
+       LEFT JOIN modalidades m ON m.id = cp.modalidad_id
+       LEFT JOIN disponibilidades d ON d.id = cp.disponibilidad_id
+       WHERE c.email = ?
+       LIMIT 1'
+    );
+    $profStmt->execute([$email]);
+    if ($prof = $profStmt->fetch(PDO::FETCH_ASSOC)) {
+      $profileText = mp_ai_profile_text([
+        'rol' => $prof['rol_deseado'] ?? '',
+        'nivel' => $prof['nivel_nombre'] ?? '',
+        'ciudad' => $prof['ciudad'] ?? '',
+        'modalidad' => $prof['modalidad_nombre'] ?? '',
+        'disponibilidad' => $prof['disponibilidad_nombre'] ?? '',
+        'resumen' => $prof['resumen'] ?? '',
+        'habilidades' => $prof['habilidades'] ? array_filter(array_map('trim', explode(',', (string)$prof['habilidades']))) : [],
+      ]);
+      $candSkillsGlobal = $prof['habilidades']
+        ? array_values(array_filter(array_map('trim', explode(',', (string)$prof['habilidades']))))
+        : [];
+      $candSkillsGlobalClean = $candSkillsGlobal
+        ? array_values(array_filter(array_map(static function ($v) {
+            $s = trim((string)$v);
+            $s = preg_replace('/\\s*[·•]\\s*\\d+.*/u', '', $s);
+            $s = preg_replace('/\\d+\\s*(anos|anios|años)?/iu', '', $s);
+            $s = preg_replace('/\\s+anos?|\\s+anios?/iu', '', $s);
+            return trim(preg_replace('/\\s+/', ' ', $s));
+          }, $candSkillsGlobal)))
+        : [];
+      $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+      $base = getenv('OPENAI_BASE') ?: 'https://api.openai.com/v1';
+      $model = getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-3-small';
+      if (class_exists('OpenAIClient') && trim((string)$apiKey) !== '') {
+        $client = new OpenAIClient($apiKey, $base, $model);
+        $aiVec = $client->embed($profileText);
+        $aiNorm = mp_ai_norm($aiVec);
+      }
+    }
+  } catch (Throwable $e) {
+    $aiError = $e->getMessage();
+  }
+
   try {
     $prefStmt = $pdo->prepare(
       'SELECT cp.rol_deseado, c.ciudad, m.nombre AS modalidad_nombre
@@ -183,7 +348,40 @@ if ($pdo instanceof PDO && $email) {
 
       $tags = mp_extract_tags($row['etiquetas'] ?? '');
       $stateMeta = mp_state_meta($estado);
-      $matchPercent = isset($row['match_score']) ? max(0, min(100, (int)$row['match_score'])) : null;
+      // Recalcula con la misma fórmula que el resto de vistas para mantener un único valor de match
+      $matchPercent = null;
+      if ($aiVec && $aiNorm > 0.0) {
+        try {
+          $embStmt = $pdo->prepare('SELECT embedding, norm FROM vacante_embeddings WHERE vacante_id = ? LIMIT 1');
+          $embStmt->execute([(int)$row['vacante_id']]);
+          if ($emb = $embStmt->fetch(PDO::FETCH_ASSOC)) {
+              $vacEmbedding = json_decode((string)($emb['embedding'] ?? ''), true);
+              if (is_array($vacEmbedding)) {
+                $vacNorm = isset($emb['norm']) ? (float)$emb['norm'] : mp_ai_norm($vacEmbedding);
+              // Usa los mismos pesos que la vista de empresa para ser uniforme
+              $vacText = ($row['descripcion'] ?? '').' '.($row['requisitos'] ?? '');
+              $weights = mp_ai_weights();
+              $cos = mp_ai_cosine($aiVec, $aiNorm, $vacEmbedding, $vacNorm);
+              $embedScore = max(0, min(1, $cos)) * 100;
+                $vacTags = mp_ai_clean_skills($row['etiquetas'] ?? '');
+                $skillsScore = mp_ai_skill_overlap($candSkillsGlobalClean ?: $candSkillsGlobal, $vacTags);
+              $reqYears = mp_ai_required_years($vacText);
+              $expScore = mp_ai_exp_score($reqYears, null); // sin info de años exactos aquí
+              $matchPercent = round(
+                $weights['embed'] * $embedScore +
+                $weights['skills'] * $skillsScore +
+                $weights['exp'] * $expScore,
+                1
+              );
+            }
+          }
+        } catch (Throwable $e) {
+          // ignora y deja match en null si falla
+        }
+      }
+      if ($matchPercent === null && isset($row['match_score'])) {
+        $matchPercent = (float)$row['match_score'];
+      }
 
       $postulaciones[] = [
         'id' => (int)$row['id'],
@@ -205,6 +403,7 @@ if ($pdo instanceof PDO && $email) {
           isset($row['salario_max']) ? (int)$row['salario_max'] : null,
           (string)($row['moneda'] ?? 'COP')
         ),
+        'can_delete' => ($estado === 'no_seleccionado'),
       ];
     }
   } catch (Throwable $error) {
@@ -349,7 +548,7 @@ $baseHref = 'index.php';
             .'&empresa='.rawurlencode($post['empresa'])
             .'&ciudad='.rawurlencode($post['ciudad'] ?? 'Remoto');
           $matchPercent = $post['match_percent'] ?? 0;
-          $matchLabel = $post['match_percent'] !== null ? 'Match '.$post['match_percent'].'%' : 'Match no disponible';
+          $matchLabel = $post['match_percent'] !== null ? 'Match '.number_format((float)$post['match_percent'], 1).'%' : 'Match no disponible';
         ?>
         <article class="mp-post card">
           <div class="mp-post-head">
@@ -407,6 +606,13 @@ $baseHref = 'index.php';
             <a class="btn btn-primary" href="<?=$detalleUrl; ?>">Ver detalle</a>
             <a class="btn btn-outline" href="<?=$comprobanteUrl; ?>" target="_blank" rel="noopener">Comprobante</a>
             <a class="btn btn-secondary" href="?view=editar_perfil">Actualizar CV</a>
+            <?php if (!empty($post['can_delete'])): ?>
+              <form method="POST" action="actions/delete_postulacion.php" style="display:inline;">
+                <input type="hidden" name="csrf" value="<?=htmlspecialchars($_SESSION['csrf'] ?? '', ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="postulacion_id" value="<?=$post['id']; ?>">
+                <button type="submit" class="btn btn-danger" style="margin-top:8px;">Eliminar</button>
+              </form>
+            <?php endif; ?>
           </div>
         </article>
       <?php endforeach; ?>

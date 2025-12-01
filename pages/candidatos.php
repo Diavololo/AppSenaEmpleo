@@ -19,6 +19,11 @@ if (empty($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(16)); }
 $csrf = $_SESSION['csrf'];
 
 require __DIR__.'/db.php';
+// Cliente OpenAI para IA
+$openaiClientFile = dirname(__DIR__).'/lib/OpenAIClient.php';
+if (is_file($openaiClientFile)) {
+  require_once $openaiClientFile;
+}
 
 if (!function_exists('cd_e')) {
   function cd_e(?string $value): string {
@@ -45,20 +50,197 @@ if (!function_exists('cd_human_time_diff')) {
     $now = new DateTime('now');
     $diff = $now->diff($target);
     if ($diff->invert === 0) {
-      if ($diff->days === 0) { return 'Próximamente'; }
-      if ($diff->days === 1) { return 'En 1 día'; }
-      return 'En '.$diff->days.' días';
+      if ($diff->days === 0) { return 'PrÃ³ximamente'; }
+      if ($diff->days === 1) { return 'En 1 dÃ­a'; }
+      return 'En '.$diff->days.' dÃ­as';
     }
     if ($diff->days === 0) {
       $hours = (int)$diff->h;
       if ($hours <= 1) { return 'Publicada hoy'; }
       return 'Hace '.$hours.' horas';
     }
-    if ($diff->days === 1) { return 'Hace 1 día'; }
-    if ($diff->days < 30) { return 'Hace '.$diff->days.' días'; }
+    if ($diff->days === 1) { return 'Hace 1 dÃ­a'; }
+    if ($diff->days < 30) { return 'Hace '.$diff->days.' dÃ­as'; }
     $months = (int)floor($diff->days / 30);
     if ($months <= 1) { return 'Hace 1 mes'; }
     return 'Hace '.$months.' meses';
+  }
+}
+
+if (!function_exists('cd_ai_norm')) {
+  function cd_ai_norm(array $vector): float {
+    $sum = 0.0;
+    foreach ($vector as $v) { $sum += $v * $v; }
+    return sqrt($sum);
+  }
+}
+
+if (!function_exists('cd_ai_skill_overlap')) {
+  function cd_ai_skill_overlap(array $candSkills, array $vacTags): int
+  {
+    $cand = array_filter(array_map(static fn($v) => mb_strtolower(trim((string)$v), 'UTF-8'), $candSkills));
+    $vac  = array_filter(array_map(static fn($v) => mb_strtolower(trim((string)$v), 'UTF-8'), $vacTags));
+    $cand = array_values(array_unique($cand));
+    $vac  = array_values(array_unique($vac));
+    if (!$cand || !$vac) { return 20; } // penaliza si no hay datos
+    $common = array_intersect($cand, $vac);
+    $max = max(count($cand), count($vac));
+    if ($max === 0) { return 20; }
+    return (int)round(count($common) / $max * 100);
+  }
+}
+
+if (!function_exists('cd_ai_exp_score')) {
+  function cd_ai_exp_score(?int $required, ?int $candYears): int
+  {
+    if ($required === null || $required <= 0 || $candYears === null) { return 20; }
+    if ($candYears >= $required) { return 100; }
+    return (int)round(max(0, ($candYears / $required) * 100));
+  }
+}
+
+if (!function_exists('cd_ai_soft_score')) {
+  function cd_ai_soft_score(string $candText, string $vacText): int
+  {
+    $keywords = ['comunicaciÃ³n','comunicacion','equipo','liderazgo','responsable','proactivo','cliente','adaptable','resoluciÃ³n','resolucion'];
+    $candLow = mb_strtolower($candText, 'UTF-8');
+    $vacLow  = mb_strtolower($vacText, 'UTF-8');
+    $hits = 0;
+    foreach ($keywords as $k) {
+      if (strpos($candLow, $k) !== false || strpos($vacLow, $k) !== false) {
+        $hits++;
+      }
+    }
+    if ($hits === 0) { return 20; } // penaliza ausencia de soft skills
+    if ($hits >= 4) { return 100; }
+    return 60 + $hits * 10;
+  }
+}
+
+if (!function_exists('cd_ai_norm')) {
+  function cd_ai_norm(array $vector): float {
+    $sum = 0.0;
+    foreach ($vector as $v) { $sum += $v * $v; }
+    return sqrt($sum);
+  }
+}
+
+if (!function_exists('cd_ai_cosine')) {
+  function cd_ai_cosine(array $a, float $normA, array $b, float $normB): float {
+    if ($normA <= 0.0 || $normB <= 0.0) { return 0.0; }
+    $len = min(count($a), count($b));
+    $dot = 0.0;
+    for ($i = 0; $i < $len; $i++) { $dot += $a[$i] * $b[$i]; }
+    return $dot / ($normA * $normB);
+  }
+}
+
+if (!function_exists('cd_ai_vacancy_text')) {
+  /**
+   * @param array<string,mixed> $vac
+   */
+  function cd_ai_vacancy_text(array $vac): string {
+    $parts = array_filter([
+      'TÃ­tulo: '.($vac['titulo'] ?? ''),
+      'DescripciÃ³n: '.($vac['descripcion'] ?? ''),
+      'Requisitos: '.($vac['requisitos'] ?? ''),
+      'Ãrea: '.($vac['area'] ?? ''),
+      'Nivel: '.($vac['nivel'] ?? ''),
+      'Modalidad: '.($vac['modalidad'] ?? ''),
+      'Ciudad: '.($vac['ciudad'] ?? ''),
+      'Etiquetas: '.($vac['etiquetas'] ?? ''),
+    ]);
+    return implode("\n", $parts);
+  }
+}
+
+if (!function_exists('cd_ai_candidate_text')) {
+  /**
+   * @param array<string,mixed> $cand
+   */
+  function cd_ai_candidate_text(array $cand): string {
+    $parts = array_filter([
+      'Nombre: '.(($cand['nombres'] ?? '').' '.($cand['apellidos'] ?? '')),
+      'Rol deseado: '.($cand['rol_deseado'] ?? ''),
+      'Nivel: '.($cand['nivel_nombre'] ?? ''),
+      'Ciudad: '.($cand['ciudad'] ?? ''),
+      'Modalidad: '.($cand['modalidad_nombre'] ?? ''),
+      'Disponibilidad: '.($cand['disponibilidad_nombre'] ?? ''),
+      'Experiencia: '.($cand['anios_experiencia'] ?? '').' aÃ±os',
+      'Estudios: '.($cand['estudios_nombre'] ?? ''),
+      'Resumen: '.($cand['resumen'] ?? ''),
+      $cand['habilidades'] ? 'Habilidades: '.$cand['habilidades'] : null,
+    ]);
+    return implode("\n", $parts);
+  }
+}
+
+if (!function_exists('cd_ai_required_years')) {
+  function cd_ai_required_years(string $text): ?int {
+    if (preg_match('/(\\d+)\\s*(?:anos|anios)/i', $text, $m)) {
+      return (int)$m[1];
+    }
+    return null;
+  }
+}
+
+if (!function_exists('cd_ai_weights')) {
+  /**
+   * Pesos fijos para un ?nico c?lculo en todas las vistas.
+   * @return array{embed:float,skills:float,exp:float}
+   */
+  function cd_ai_weights(string $text): array {
+    return ['embed' => 0.6, 'skills' => 0.3, 'exp' => 0.1];
+  }
+}
+
+if (!function_exists('cd_ai_cosine')) {
+  function cd_ai_cosine(array $a, float $normA, array $b, float $normB): float {
+    if ($normA <= 0.0 || $normB <= 0.0) { return 0.0; }
+    $len = min(count($a), count($b));
+    $dot = 0.0;
+    for ($i = 0; $i < $len; $i++) { $dot += $a[$i] * $b[$i]; }
+    return $dot / ($normA * $normB);
+  }
+}
+
+if (!function_exists('cd_ai_vacancy_text')) {
+  /**
+   * @param array<string,mixed> $vac
+   */
+  function cd_ai_vacancy_text(array $vac): string {
+    $parts = array_filter([
+      'TÃ­tulo: '.($vac['titulo'] ?? ''),
+      'DescripciÃ³n: '.($vac['descripcion'] ?? ''),
+      'Requisitos: '.($vac['requisitos'] ?? ''),
+      'Ãrea: '.($vac['area'] ?? ''),
+      'Nivel: '.($vac['nivel'] ?? ''),
+      'Modalidad: '.($vac['modalidad'] ?? ''),
+      'Ciudad: '.($vac['ciudad'] ?? ''),
+      'Etiquetas: '.($vac['etiquetas'] ?? ''),
+    ]);
+    return implode("\n", $parts);
+  }
+}
+
+if (!function_exists('cd_ai_candidate_text')) {
+  /**
+   * @param array<string,mixed> $cand
+   */
+  function cd_ai_candidate_text(array $cand): string {
+    $parts = array_filter([
+      'Nombre: '.(($cand['nombres'] ?? '').' '.($cand['apellidos'] ?? '')),
+      'Rol deseado: '.($cand['rol_deseado'] ?? ''),
+      'Nivel: '.($cand['nivel_nombre'] ?? ''),
+      'Ciudad: '.($cand['ciudad'] ?? ''),
+      'Modalidad: '.($cand['modalidad_nombre'] ?? ''),
+      'Disponibilidad: '.($cand['disponibilidad_nombre'] ?? ''),
+      'Experiencia: '.($cand['anios_experiencia'] ?? '').' aÃ±os',
+      'Estudios: '.($cand['estudios_nombre'] ?? ''),
+      'Resumen: '.($cand['resumen'] ?? ''),
+      $cand['habilidades'] ? 'Habilidades: '.$cand['habilidades'] : null,
+    ]);
+    return implode("\n", $parts);
   }
 }
 
@@ -66,6 +248,9 @@ $empresaId = isset($sessionUser['empresa_id']) ? (int)$sessionUser['empresa_id']
 $vacId = isset($_GET['vacante_id']) ? (int)$_GET['vacante_id'] : (isset($_GET['id']) ? (int)$_GET['id'] : null);
 
 $vac = null;
+$vacEmbedding = null;
+$vacNorm = 0.0;
+$aiClient = null;
 $headerChips = [];
 $kpis = [ 'total' => 0, 'preseleccion' => 0, 'entrevista' => 0, 'descartados' => 0 ];
 $includeDescartados = (isset($_GET['include_descartados']) && $_GET['include_descartados'] === '1');
@@ -74,7 +259,7 @@ $error = null;
 if ($pdo instanceof PDO && $empresaId && $vacId) {
   try {
     $stmt = $pdo->prepare(
-      'SELECT v.id, v.titulo, v.ciudad, v.etiquetas, v.publicada_at,
+      'SELECT v.id, v.titulo, v.descripcion, v.requisitos, v.ciudad, v.etiquetas, v.publicada_at,
               m.nombre AS modalidad, n.nombre AS nivel, a.nombre AS area,
               e.id AS empresa_id, e.razon_social AS empresa_nombre
          FROM vacantes v
@@ -110,7 +295,7 @@ if ($pdo instanceof PDO && $empresaId && $vacId) {
         $cnt = (int)$row['cnt'];
         $estado = strtolower((string)$row['estado']);
         if ($estado === 'no_seleccionado') { $kpis['descartados'] += $cnt; }
-        // Total dinámico: incluye o excluye descartados según toggle.
+        // Total dinÃ¡mico: incluye o excluye descartados segÃºn toggle.
         if ($includeDescartados || $estado !== 'no_seleccionado') { $kpis['total'] += $cnt; }
         if ($estado === 'preseleccion') { $kpis['preseleccion'] += $cnt; }
         if ($estado === 'entrevista')   { $kpis['entrevista']   += $cnt; }
@@ -124,12 +309,88 @@ if ($pdo instanceof PDO && $empresaId && $vacId) {
   elseif (!$empresaId) { $error = 'No encontramos la empresa asociada a tu cuenta.'; }
 }
 
-$vacTitle   = $vac['titulo'] ?? 'Vacante sin título';
+$vacTitle   = $vac['titulo'] ?? 'Vacante sin tÃ­tulo';
 $company    = $vac['empresa_nombre'] ?? ($sessionUser['empresa'] ?? ($sessionUser['display_name'] ?? 'Mi empresa'));
 $companyId  = isset($vac['empresa_id']) ? (int)$vac['empresa_id'] : null;
 $location   = !empty($vac['ciudad']) ? (string)$vac['ciudad'] : 'Remoto';
 $published  = !empty($vac['publicada_at']) ? cd_human_time_diff($vac['publicada_at']) : 'Publicada recientemente';
 $candidatos = [];
+$aiClient = null;
+$vacEmbedding = null;
+$vacNorm = 0.0;
+$aiError = null;
+
+// Inicializa OpenAI y embedding de la vacante
+try {
+  $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+  $base = getenv('OPENAI_BASE') ?: 'https://api.openai.com/v1';
+  $model = getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-3-small';
+  if (class_exists('OpenAIClient') && trim((string)$apiKey) !== '' && $vac && $pdo instanceof PDO) {
+    $aiClient = new OpenAIClient($apiKey, $base, $model);
+    $embStmt = $pdo->prepare('SELECT embedding, norm FROM vacante_embeddings WHERE vacante_id = ? LIMIT 1');
+    $embStmt->execute([$vacId]);
+    if ($embRow = $embStmt->fetch(PDO::FETCH_ASSOC)) {
+      $vacEmbedding = json_decode((string)($embRow['embedding'] ?? ''), true);
+      if (is_array($vacEmbedding)) {
+        $vacNorm = isset($embRow['norm']) ? (float)$embRow['norm'] : cd_ai_norm($vacEmbedding);
+      } else {
+        $vacEmbedding = null;
+      }
+    }
+    if (!$vacEmbedding) {
+      $text = cd_ai_vacancy_text($vac);
+      $vec = $aiClient->embed($text);
+      $vacEmbedding = $vec;
+      $vacNorm = cd_ai_norm($vec);
+      try {
+        $ins = $pdo->prepare('INSERT INTO vacante_embeddings (vacante_id, embedding, norm, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) ON DUPLICATE KEY UPDATE embedding = VALUES(embedding), norm = VALUES(norm), updated_at = VALUES(updated_at)');
+        $ins->execute([$vacId, json_encode($vec), $vacNorm]);
+      } catch (Throwable $e) {
+        error_log('[candidatos] no se pudo guardar embedding de vacante: '.$e->getMessage());
+      }
+    }
+  }
+} catch (Throwable $e) {
+  $aiError = $e->getMessage();
+}
+$aiClient = null;
+$vacEmbedding = null;
+$vacNorm = 0.0;
+$aiError = null;
+
+// Inicializa OpenAI y embedding de la vacante
+try {
+  $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+  $base = getenv('OPENAI_BASE') ?: 'https://api.openai.com/v1';
+  $model = getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-3-small';
+  if (class_exists('OpenAIClient') && trim((string)$apiKey) !== '' && $vac && $pdo instanceof PDO) {
+    $aiClient = new OpenAIClient($apiKey, $base, $model);
+    $embStmt = $pdo->prepare('SELECT embedding, norm FROM vacante_embeddings WHERE vacante_id = ? LIMIT 1');
+    $embStmt->execute([$vacId]);
+    if ($embRow = $embStmt->fetch(PDO::FETCH_ASSOC)) {
+      $vacEmbedding = json_decode((string)($embRow['embedding'] ?? ''), true);
+      if (is_array($vacEmbedding)) {
+        $vacNorm = isset($embRow['norm']) ? (float)$embRow['norm'] : cd_ai_norm($vacEmbedding);
+      } else {
+        $vacEmbedding = null;
+      }
+    }
+    if (!$vacEmbedding) {
+      $text = cd_ai_vacancy_text($vac);
+      $vec = $aiClient->embed($text);
+      $vacEmbedding = $vec;
+      $vacNorm = cd_ai_norm($vec);
+      try {
+        $ins = $pdo->prepare('INSERT INTO vacante_embeddings (vacante_id, embedding, norm, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW()) ON DUPLICATE KEY UPDATE embedding = VALUES(embedding), norm = VALUES(norm), updated_at = VALUES(updated_at)');
+        $ins->execute([$vacId, json_encode($vec), $vacNorm]);
+      } catch (Throwable $e) {
+        error_log('[candidatos] no se pudo guardar embedding de vacante: '.$e->getMessage());
+      }
+    }
+  }
+} catch (Throwable $e) {
+  $aiError = $e->getMessage();
+}
 
 if ($pdo instanceof PDO && !$error && $vacId) {
   try {
@@ -167,6 +428,45 @@ if ($pdo instanceof PDO && !$error && $vacId) {
   } catch (Throwable $ce) {
     error_log('[candidatos] listado: '.$ce->getMessage());
   }
+
+  // Calcula score IA ponderado si falta y tenemos embeddings
+  if ($aiClient && $vacEmbedding) {
+    $vacText = ($vac['descripcion'] ?? '').' '.($vac['requisitos'] ?? '');
+    $weights = cd_ai_weights($vacText);
+    $requiredYears = cd_ai_required_years($vacText);
+    $vacTags = cd_ai_clean_skills(cd_split_tags($vac['etiquetas'] ?? ''));
+
+    foreach ($candidatos as &$cand) {
+      // Siempre recalculamos con IA para reflejar diferencias (valor ?nico y consistente).
+      // Embedding candidato vs vacante
+      try {
+        $candText = cd_ai_candidate_text($cand);
+        $candVec = $aiClient->embed($candText);
+        $candNorm = cd_ai_norm($candVec);
+        $cos = cd_ai_cosine($candVec, $candNorm, $vacEmbedding, $vacNorm);
+        $embedScore = max(0, min(1, $cos)) * 100;
+      } catch (Throwable $e) {
+        error_log('[candidatos] no se pudo calcular embedding de candidato: '.$e->getMessage());
+        $embedScore = 0;
+      }
+      // Skills
+      $candSkills = cd_ai_clean_skills($cand['habilidades'] ?? '');
+      $skillsScore = cd_ai_skill_overlap($candSkills, $vacTags);
+      // Experiencia
+      $expScore = cd_ai_exp_score($requiredYears, null);
+      $scoreBase = round(
+        $weights['embed'] * $embedScore +
+        $weights['skills'] * $skillsScore +
+        $weights['exp'] * $expScore,
+        1
+      );
+
+
+      $cand['match_score_calc'] = max(0.0, min(100.0, (float)$scoreBase));
+    }
+    unset($cand);
+    usort($candidatos, static fn($a, $b) => ($b['match_score_calc'] ?? 0) <=> ($a['match_score_calc'] ?? 0));
+  }
 }
 
 $flash = $_SESSION['flash_candidatos'] ?? null;
@@ -187,7 +487,7 @@ unset($_SESSION['flash_candidatos']);
           <?php else: ?>
             <?=cd_e($company); ?>
           <?php endif; ?>
-           · <?=cd_e($location); ?> · <?=cd_e($published); ?>
+           Â· <?=cd_e($location); ?> Â· <?=cd_e($published); ?>
         </p>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:.4rem; justify-content:center;">
           <?php if ($headerChips): ?>
@@ -209,7 +509,7 @@ unset($_SESSION['flash_candidatos']);
             <span class="kpi-value" style="font-size:20px; font-weight:700;"><?=cd_e((string)$kpis['total']); ?></span>
           </div>
           <div class="kpi card" style="flex:1 1 180px; min-width:180px; padding:.5rem .75rem;">
-            <span class="kpi-label" style="font-size:14px; font-weight:500;">Preselección</span>
+            <span class="kpi-label" style="font-size:14px; font-weight:500;">PreselecciÃ³n</span>
             <span class="kpi-value" style="font-size:20px; font-weight:700;"><?=cd_e((string)$kpis['preseleccion']); ?></span>
           </div>
           <div class="kpi card" style="flex:1 1 180px; min-width:180px; padding:.5rem .75rem;">
@@ -225,10 +525,10 @@ unset($_SESSION['flash_candidatos']);
             <select id="orden" class="select-pill" aria-label="Ordenar candidatos">
               <option selected>Score IA (desc)</option>
               <option>Score IA (asc)</option>
-              <option>Más recientes</option>
+              <option>MÃ¡s recientes</option>
             </select>
             <a class="btn btn-outline" style="min-height:36px; border-radius:24px;" href="index.php?view=candidatos&vacante_id=<?=cd_e((string)$vacId); ?>&include_descartados=<?= $includeDescartados ? '0' : '1'; ?>">
-              Incluir descartados: <?= $includeDescartados ? 'Sí' : 'No'; ?>
+              Incluir descartados: <?= $includeDescartados ? 'SÃ­' : 'No'; ?>
             </a>
           </div>
         </div>
@@ -276,7 +576,7 @@ unset($_SESSION['flash_candidatos']);
           </div>
 
           <div class="field">
-            <label id="filter-score-label">Score mínimo (IA)</label>
+            <label id="filter-score-label">Score mÃ­nimo (IA)</label>
             <div class="progress" role="progressbar" aria-labelledby="filter-score-label" aria-valuenow="60" aria-valuemin="0" aria-valuemax="100" aria-valuetext="60%">
               <div class="progress-bar" style="height:8px;"><span style="width:60%; height:6px;"></span></div>
               <div class="progress-label">60%</div>
@@ -292,7 +592,7 @@ unset($_SESSION['flash_candidatos']);
         </div>
       </aside>
 
-      <!-- Resultados dinámicos -->
+      <!-- Resultados dinÃ¡micos -->
       <section style="flex:1; display:flex; flex-direction:column; gap:24px;">
         <?php if ($candidatos): ?>
           <?php foreach ($candidatos as $idx => $cand): ?>
@@ -301,16 +601,17 @@ unset($_SESSION['flash_candidatos']);
               $fullName = trim((string)($cand['nombres'] ?? '') . ' ' . (string)($cand['apellidos'] ?? ''));
               $metaParts = [];
               if (!empty($cand['rol_deseado'])) { $metaParts[] = (string)$cand['rol_deseado']; }
-              if (!empty($cand['anios_experiencia'])) { $metaParts[] = (int)$cand['anios_experiencia'].' años'; }
+              if (!empty($cand['anios_experiencia'])) { $metaParts[] = (int)$cand['anios_experiencia'].' aÃ±os'; }
               if (!empty($cand['ciudad'])) { $metaParts[] = (string)$cand['ciudad']; }
               if (!empty($cand['modalidad_nombre'])) { $metaParts[] = (string)$cand['modalidad_nombre']; }
-              $meta = implode(' · ', $metaParts);
+              $meta = implode(' Â· ', $metaParts);
 
               $estado = strtolower((string)($cand['estado'] ?? 'recibida'));
               $estadoLabel = ucfirst(str_replace('_',' ', $estado));
               $estadoClass = ($estado === 'preseleccion') ? 'review' : (($estado === 'entrevista') ? 'interview' : '');
 
-              $score = isset($cand['match_score']) ? max(0, min(100, (int)$cand['match_score'])) : 0;
+              $calcScore = $cand['match_score_calc'] ?? $cand['match_score'] ?? null;
+              $score = $calcScore !== null ? max(0, min(100, (int)$calcScore)) : 0;
               $tags = cd_split_tags($cand['habilidades'] ?? '');
               $displayTags = array_slice($tags, 0, 6);
             ?>
@@ -333,10 +634,14 @@ unset($_SESSION['flash_candidatos']);
                 </div>
                 <div style="display:flex; align-items:center; gap:16px;">
                   <span class="status <?=cd_e($estadoClass); ?>"><?=cd_e($estadoLabel); ?></span>
-                  <div style="display:flex; align-items:center; gap:8px;">
+                    <div style="display:flex; align-items:center; gap:8px;">
                     <span class="muted" style="font-weight:600;">Score IA</span>
-                    <div class="progress-bar" style="height:8px; min-inline-size:180px;"><span style="width:<?=cd_e((string)$score); ?>%; height:6px;"></span></div>
-                    <span class="muted" style="font-weight:600;"><?=cd_e((string)$score); ?></span>
+                    <?php
+                      $scoreFloat = max(0.0, min(100.0, (float)$score));
+                      $scoreText = number_format($scoreFloat, 1);
+                    ?>
+                    <div class="progress-bar" style="height:8px; min-inline-size:180px;"><span style="width:<?=$scoreText; ?>%; height:6px;"></span></div>
+                    <span class="muted" style="font-weight:600;"><?=$scoreText; ?></span>
                   </div>
                 </div>
               </header>
@@ -373,7 +678,7 @@ unset($_SESSION['flash_candidatos']);
                   <input type="hidden" name="vacante_id" value="<?=cd_e((string)$vacId); ?>" />
                   <input type="hidden" name="candidato_email" value="<?=cd_e((string)$cand['email']); ?>" />
                   <input type="hidden" name="nuevo_estado" value="preseleccion" />
-                  <button class="btn btn-outline" style="min-height:40px; border-radius:24px;" type="submit">Mover a preselección</button>
+                  <button class="btn btn-outline" style="min-height:40px; border-radius:24px;" type="submit">Mover a preselecciÃ³n</button>
                 </form>
                  <form method="post" action="index.php?action=update_postulacion" style="display:inline;">
                    <input type="hidden" name="csrf" value="<?=cd_e($csrf); ?>" />
@@ -393,11 +698,11 @@ unset($_SESSION['flash_candidatos']);
             </article>
           <?php endforeach; ?>
         <?php else: ?>
-          <div class="card"><p class="muted m-0">Aún no hay postulaciones para esta vacante.</p></div>
+          <div class="card"><p class="muted m-0">AÃºn no hay postulaciones para esta vacante.</p></div>
         <?php endif; ?>
 
-        <!-- Paginación futura -->
-        <nav class="actions" role="navigation" aria-label="Paginación" style="justify-content:center; gap:10px; display:none;"></nav>
+        <!-- PaginaciÃ³n futura -->
+        <nav class="actions" role="navigation" aria-label="PaginaciÃ³n" style="justify-content:center; gap:10px; display:none;"></nav>
       </section>
     </div>
   </main>
@@ -419,10 +724,36 @@ unset($_SESSION['flash_candidatos']);
     .status.review{ background:#EEF6EA; color:#1D7C1D; border:1px solid #CDE9CB; }
     .status.interview{ background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-border); }
 
-    /* Variantes de botón locales compatibles con el sistema de botones global */
+    /* Variantes de botÃ³n locales compatibles con el sistema de botones global */
     .btn-outline{ background: var(--white); color: var(--brand-700); border:1px solid var(--border); }
     .btn-ghost{ background: transparent; color: var(--brand-700); border:1px solid transparent; }
     .btn-brand{ background: var(--grad-cta); color: var(--white); border:none; box-shadow: var(--shadow-md); }
 
-    /* Quita reordenamiento del sidebar en tamaños medianos; mantiene filtros a la izquierda */
+    /* Quita reordenamiento del sidebar en tamaÃ±os medianos; mantiene filtros a la izquierda */
   </style>
+if (!function_exists('cd_ai_clean_skills')) {
+  /**
+   * Normaliza habilidades quitando números/años y símbolos.
+   * @param array<int,string>|string|null $skills
+   * @return string[]
+   */
+  function cd_ai_clean_skills($skills): array
+  {
+    if (is_string($skills)) {
+      $skills = preg_split('/[,;|]+/', $skills) ?: [];
+    }
+    if (!is_array($skills)) { return []; }
+    $out = [];
+    foreach ($skills as $skill) {
+      $s = trim((string)$skill);
+      if ($s === '') { continue; }
+      $s = preg_replace('/\\s*[·•]\\s*\\d+.*/u', '', $s);
+      $s = preg_replace('/\\d+\\s*(anos|anios|años)?/iu', '', $s);
+      $s = preg_replace('/\\s+anos?|\\s+anios?/iu', '', $s);
+      $s = trim(preg_replace('/\\s+/', ' ', (string)$s));
+      if ($s === '') { continue; }
+      $out[] = $s;
+    }
+    return array_values(array_unique($out));
+  }
+}
