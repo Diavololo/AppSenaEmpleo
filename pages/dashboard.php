@@ -17,6 +17,11 @@ if (!$userSession || ($userSession['type'] ?? '') !== 'persona') {
 
 
 require_once __DIR__.'/db.php';
+// Cliente OpenAI para embeddings
+$openaiClientFile = dirname(__DIR__).'/lib/OpenAIClient.php';
+if (is_file($openaiClientFile)) {
+  require_once $openaiClientFile;
+}
 
 
 
@@ -51,6 +56,14 @@ $profileData = [
   'fullName' => $fullName,
 
   'firstName' => $firstName,
+
+  'area_id' => null,
+
+  'nivel_id' => null,
+
+  'modalidad_id' => null,
+
+  'disponibilidad_id' => null,
 
   'headline' => null,
 
@@ -106,7 +119,7 @@ if ($pdo instanceof PDO) {
 
             cd.perfil AS resumen, cd.areas_interes, cd.foto_ruta,
 
-            cp.rol_deseado, cp.habilidades,
+            cp.rol_deseado, cp.habilidades, cp.area_id, cp.nivel_id, cp.modalidad_id, cp.disponibilidad_id,
 
             a.nombre AS area_nombre,
 
@@ -153,6 +166,14 @@ if ($pdo instanceof PDO) {
     $profileData['city'] = $row['ciudad'] ?? null;
 
     $profileData['headline'] = $row['rol_deseado'] ?: ($row['area_nombre'] ?? null);
+
+    $profileData['area_id'] = isset($row['area_id']) ? (int)$row['area_id'] : null;
+
+    $profileData['nivel_id'] = isset($row['nivel_id']) ? (int)$row['nivel_id'] : null;
+
+    $profileData['modalidad_id'] = isset($row['modalidad_id']) ? (int)$row['modalidad_id'] : null;
+
+    $profileData['disponibilidad_id'] = isset($row['disponibilidad_id']) ? (int)$row['disponibilidad_id'] : null;
 
     $profileData['level'] = $row['nivel_nombre'] ?? null;
 
@@ -446,6 +467,177 @@ if (!function_exists('dash_match_score')) {
 
 }
 
+
+if (!function_exists('dash_ai_norm')) {
+  function dash_ai_norm(array $vector): float {
+    $sum = 0.0;
+    foreach ($vector as $v) { $sum += $v * $v; }
+    return sqrt($sum);
+  }
+}
+
+
+if (!function_exists('dash_ai_cosine')) {
+  function dash_ai_cosine(array $a, float $normA, array $b, float $normB): float {
+    if ($normA <= 0.0 || $normB <= 0.0) { return 0.0; }
+    $len = min(count($a), count($b));
+    $dot = 0.0;
+    for ($i = 0; $i < $len; $i++) { $dot += $a[$i] * $b[$i]; }
+    return $dot / ($normA * $normB);
+  }
+}
+
+
+if (!function_exists('dash_ai_profile_text')) {
+  /**
+   * @param array<string,mixed> $profile
+   */
+  function dash_ai_profile_text(array $profile, string $email): string {
+    $parts = array_filter([
+      'Email: '.$email,
+      'Nombre: '.($profile['fullName'] ?? ''),
+      'Rol deseado: '.($profile['headline'] ?? ''),
+      'Nivel: '.($profile['level'] ?? ''),
+      'Ciudad: '.($profile['city'] ?? ''),
+      'Modalidad: '.($profile['modalidad'] ?? ''),
+      'Disponibilidad: '.($profile['disponibilidad'] ?? ''),
+      'Resumen: '.($profile['summary'] ?? ''),
+      $profile['skills'] ? 'Habilidades: '.implode(', ', (array)$profile['skills']) : null,
+      $profile['pills'] ? 'Preferencias: '.implode(', ', (array)$profile['pills']) : null,
+    ]);
+    return implode("\n", $parts);
+  }
+}
+
+
+if (!function_exists('dash_ai_recommendations')) {
+  /**
+   * @param array<string,mixed> $profile
+   * @param array<int,bool> $applied
+   * @return array{items:array<int,array<string,mixed>>,error:?string}
+   */
+  function dash_ai_recommendations(PDO $pdo, array $profile, string $email, array $applied = [], int $limit = 8): array {
+    if (!class_exists('OpenAIClient')) {
+      return ['items' => [], 'error' => 'Falta el cliente OpenAI'];
+    }
+
+    $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+    if (trim((string)$apiKey) === '') {
+      return ['items' => [], 'error' => 'Configura la variable de entorno OPENAI_API_KEY.'];
+    }
+
+    $base = getenv('OPENAI_BASE') ?: 'https://api.openai.com/v1';
+    $model = getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-3-small';
+
+    try {
+      $client = new OpenAIClient($apiKey, $base, $model);
+    } catch (Throwable $e) {
+      return ['items' => [], 'error' => 'No se pudo inicializar OpenAI: '.$e->getMessage()];
+    }
+
+    try {
+      $tableExists = $pdo->query("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'vacante_embeddings' LIMIT 1");
+      if (!$tableExists || !$tableExists->fetchColumn()) {
+        return ['items' => [], 'error' => 'La tabla vacante_embeddings no existe. Ejecuta las migraciones para crearla.'];
+      }
+    } catch (Throwable $e) {
+      return ['items' => [], 'error' => 'No se pudo verificar vacante_embeddings: '.$e->getMessage()];
+    }
+
+    try {
+      $profileText = dash_ai_profile_text($profile, $email);
+      $userVec = $client->embed($profileText);
+      $userNorm = dash_ai_norm($userVec);
+    } catch (Throwable $e) {
+      return ['items' => [], 'error' => 'No se pudo calcular el embedding del perfil: '.$e->getMessage()];
+    }
+
+    $conditions = ['v.estado IN ("publicada","activa","publicada ")'];
+    $params = [];
+
+    if (!empty($profile['area_id'])) { $conditions[] = 'v.area_id = ?'; $params[] = (int)$profile['area_id']; }
+    if (!empty($profile['nivel_id'])) { $conditions[] = 'v.nivel_id = ?'; $params[] = (int)$profile['nivel_id']; }
+    if (!empty($profile['modalidad_id'])) { $conditions[] = 'v.modalidad_id = ?'; $params[] = (int)$profile['modalidad_id']; }
+    if (!empty($profile['city'])) { $conditions[] = '(v.ciudad = ? OR v.ciudad = "Remoto")'; $params[] = $profile['city']; }
+
+    $sql = '
+      SELECT v.id, v.titulo, v.descripcion, v.requisitos, v.etiquetas, v.ciudad,
+             v.salario_min, v.salario_max, v.moneda, v.publicada_at, v.created_at,
+             e.id AS empresa_id, e.razon_social AS empresa_nombre,
+             a.nombre AS area_nombre, n.nombre AS nivel_nombre, m.nombre AS modalidad_nombre,
+             ve.embedding, ve.norm
+      FROM vacantes v
+      JOIN vacante_embeddings ve ON ve.vacante_id = v.id
+      LEFT JOIN empresas e ON e.id = v.empresa_id
+      LEFT JOIN areas a ON a.id = v.area_id
+      LEFT JOIN niveles n ON n.id = v.nivel_id
+      LEFT JOIN modalidades m ON m.id = v.modalidad_id
+      WHERE '.implode(' AND ', $conditions).'
+      ORDER BY COALESCE(v.publicada_at, v.created_at) DESC
+      LIMIT 200
+    ';
+
+    try {
+      $stmt = $pdo->prepare($sql);
+      $stmt->execute($params);
+      $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    } catch (Throwable $e) {
+      return ['items' => [], 'error' => 'No se pudieron consultar vacantes: '.$e->getMessage()];
+    }
+
+    $items = [];
+    foreach ($rows as $row) {
+      $embedding = json_decode((string)($row['embedding'] ?? ''), true);
+      if (!is_array($embedding)) { continue; }
+      $vacNorm = isset($row['norm']) ? (float)$row['norm'] : 0.0;
+      $score = dash_ai_cosine($userVec, $userNorm, $embedding, $vacNorm);
+      $scorePct = (int)round(max(0, min(1, $score)) * 100);
+
+      $pubInfo = dash_publication_info($row['publicada_at'] ?? $row['created_at']);
+      $metaParts = array_filter([
+        $row['modalidad_nombre'] ?? null,
+        $row['ciudad'] ?? null,
+        $pubInfo['meta'],
+      ]);
+
+      $tags = dash_extract_tags($row['etiquetas'] ?? null);
+      $chips = array_values(array_filter([
+        $row['nivel_nombre'] ?? null,
+        $row['modalidad_nombre'] ?? null,
+        $row['area_nombre'] ?? null,
+        $row['ciudad'] ?? null,
+      ]));
+
+      $items[] = [
+        'id' => (int)$row['id'],
+        'titulo' => $row['titulo'] ?? 'Oferta sin t��tulo',
+        'empresa' => $row['empresa_nombre'] ?? 'Empresa confidencial',
+        'empresa_id' => isset($row['empresa_id']) ? (int)$row['empresa_id'] : null,
+        'meta_line' => $metaParts ? implode(' �� ', $metaParts) : $pubInfo['meta'],
+        'badge' => $pubInfo['badge'],
+        'chips' => $chips,
+        'descripcion' => dash_truncate_text($row['descripcion'] ?? $row['requisitos'] ?? ''),
+        'coincidencias' => $tags ? array_slice($tags, 0, 4) : [],
+        'match' => $scorePct,
+        'salario' => dash_format_salary(
+          isset($row['salario_min']) ? (int)$row['salario_min'] : null,
+          isset($row['salario_max']) ? (int)$row['salario_max'] : null,
+          (string)($row['moneda'] ?? 'COP')
+        ),
+        'postulado' => isset($applied[(int)$row['id']]),
+      ];
+    }
+
+    if (!$items) {
+      return ['items' => [], 'error' => 'No hay embeddings de vacantes. Genera embeddings antes de usar recomendaciones.'];
+    }
+
+    usort($items, static fn($a, $b) => $b['match'] <=> $a['match']);
+    $items = array_slice($items, 0, max(1, $limit));
+
+    return ['items' => $items, 'error' => null];
+  }
+}
 
 
 if (!function_exists('dash_lower')) {
@@ -1240,6 +1432,16 @@ if (!$vacantes && (!empty($filterModalidad) || !empty($filterContrato)) && !empt
   ));
 }
 
+$aiResult = ['items' => [], 'error' => null];
+$vacantesFeed = $vacantes;
+if ($pdo instanceof PDO) {
+  $aiResult = dash_ai_recommendations($pdo, $profileData, $userSession['email'], $appliedVacantes, 8);
+  if (!empty($aiResult['items'])) {
+    $vacantesFeed = $aiResult['items'];
+  }
+}
+$aiError = $aiResult['error'];
+
 $kpiData = [
 
   'nuevas' => $nuevasVacantes,
@@ -1530,9 +1732,15 @@ $levelLabel = $profileData['level'] ?? null;
 
       </div>
 
-      <?php if ($vacantes): ?>
+      <?php if (!empty($aiError)): ?>
+        <article class="card">
+          <h3>Recomendaciones IA no disponibles</h3>
+          <p class="muted m-0"><?=htmlspecialchars($aiError, ENT_QUOTES, 'UTF-8'); ?></p>
+        </article>
+      <?php endif; ?>
+      <?php if ($vacantesFeed): ?>
 
-        <?php foreach ($vacantes as $vacante): ?>
+        <?php foreach ($vacantesFeed as $vacante): ?>
 
           <article class="job card">
 
