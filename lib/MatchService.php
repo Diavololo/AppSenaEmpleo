@@ -11,6 +11,28 @@ final class MatchService
     private static bool $clientInitialized = false;
     private static ?OpenAIClient $client = null;
     private static bool $encodingHelperLoaded = false;
+    private static bool $envLoaded = false;
+
+    private static function loadEnvFile(string $path): void
+    {
+        if (!is_file($path)) { return; }
+        $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if (!$lines) { return; }
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) { continue; }
+            $parts = explode('=', $line, 2);
+            if (count($parts) !== 2) { continue; }
+            [$key, $value] = $parts;
+            $key = trim($key);
+            $value = trim($value, " \"'");
+            if ($key === '') { continue; }
+            if (getenv($key) === false && !isset($_ENV[$key])) {
+                putenv($key.'='.$value);
+                $_ENV[$key] = $value;
+            }
+        }
+    }
 
     public static function getClient(): ?OpenAIClient
     {
@@ -18,6 +40,15 @@ final class MatchService
             return self::$client;
         }
         self::$clientInitialized = true;
+
+        // Carga perezosa de .env para minimizar fallos por llaves ausentes.
+        if (!self::$envLoaded) {
+            self::$envLoaded = true;
+            $rootEnv = dirname(__DIR__).'/.env';
+            $laravelEnv = dirname(__DIR__).'/laravel-app/.env';
+            self::loadEnvFile($rootEnv);
+            self::loadEnvFile($laravelEnv);
+        }
 
         if (!class_exists('OpenAIClient')) {
             return null;
@@ -347,4 +378,3 @@ final class MatchService
         return $result;
     }
 }
-
