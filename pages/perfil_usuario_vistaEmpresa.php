@@ -106,7 +106,7 @@ if (($pdo instanceof PDO)) {
       if (!empty($row['telefono'])) { $perfil['contacto']['telefono'] = (string)$row['telefono']; }
 
       $skillsStmt = $pdo->prepare(
-        'SELECT nombre, anios_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anios_experiencia DESC, nombre ASC'
+        'SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anos_experiencia DESC, nombre ASC'
       );
       $skillsStmt->execute([$targetEmail]);
       $skillRecords = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -114,10 +114,10 @@ if (($pdo instanceof PDO)) {
         $skills = [];
         foreach ($skillRecords as $skill) {
           $name = trim((string)$skill['nombre']); if ($name === '') { continue; }
-          $years = $skill['anios_experiencia'];
+          $years = $skill['anos_experiencia'];
           if ($years !== null && $years !== '') {
             $yearsFloat = (float)$years; $yearsLabel = rtrim(rtrim(number_format($yearsFloat, 1, '.', ''), '0'), '.');
-            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'anio' : 'anios');
+            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'anio' : 'años');
           } else { $skills[] = $name; }
         }
         if ($skills) { $perfil['skills'] = array_slice($skills, 0, 10); }
@@ -129,7 +129,7 @@ if (($pdo instanceof PDO)) {
     }
 
     $expStmt = $pdo->prepare(
-      'SELECT cargo, empresa, periodo, anios_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC'
+      'SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC'
     );
     $expStmt->execute([$targetEmail]);
     foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
@@ -137,7 +137,7 @@ if (($pdo instanceof PDO)) {
         'cargo'  => $exp['cargo'] ?: 'Experiencia',
         'empresa'=> $exp['empresa'] ?: '',
         'periodo'=> $exp['periodo'] ?: '',
-        'anios'  => $exp['anios_experiencia'],
+        'años'  => $exp['anos_experiencia'],
         'desc'   => $exp['descripcion'] ?: '',
       ];
     }
@@ -161,7 +161,7 @@ if (($pdo instanceof PDO)) {
 
 $perfil['experiencias'] = array_values(array_filter($perfil['experiencias'], static function (array $exp): bool {
   $values = array_map('trim', [
-    $exp['cargo'] ?? '', $exp['empresa'] ?? '', $exp['periodo'] ?? '', isset($exp['anios']) ? (string)$exp['anios'] : '', $exp['desc'] ?? '',
+    $exp['cargo'] ?? '', $exp['empresa'] ?? '', $exp['periodo'] ?? '', isset($exp['años']) ? (string)$exp['años'] : '', $exp['desc'] ?? '',
   ]);
   return implode('', $values) !== '';
 }));
@@ -242,7 +242,7 @@ $displayedError = false;
                   <?=pp_e($exp['cargo']); ?>
                   <?php if (!empty($exp['empresa'])): ?> - <?=pp_e($exp['empresa']); ?> <?php endif; ?>
                 </h3>
-                <?php $labels = array_filter([ $exp['periodo'] ?? '', isset($exp['anios']) && $exp['anios'] !== '' ? ($exp['anios'].' anios') : null, ]); ?>
+                <?php $labels = array_filter([ $exp['periodo'] ?? '', isset($exp['años']) && $exp['años'] !== '' ? ($exp['años'].' años') : null, ]); ?>
                 <?php if ($labels): ?><p class="muted m-0"><?=pp_e(implode(' - ', $labels)); ?></p><?php endif; ?>
                 <?php if (!empty($exp['desc'])): ?><p class="m-0"><?=pp_e($exp['desc']); ?></p><?php endif; ?>
               </div>

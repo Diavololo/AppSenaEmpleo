@@ -1,6 +1,7 @@
 <?php
 
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
+if (!headers_sent()) { header('Content-Type: text/html; charset=utf-8'); }
 
 // Carga variables desde el .env de Laravel (si existe) para reutilizar claves/DB/API en la app plana.
 if (!function_exists('dash_load_env_file')) {
@@ -49,11 +50,14 @@ if (!$userSession || ($userSession['type'] ?? '') !== 'persona') {
 
 
 require_once __DIR__.'/db.php';
+require_once dirname(__DIR__).'/lib/EncodingHelper.php';
 // Cliente OpenAI para embeddings
 $openaiClientFile = dirname(__DIR__).'/lib/OpenAIClient.php';
 if (is_file($openaiClientFile)) {
   require_once $openaiClientFile;
 }
+require_once dirname(__DIR__).'/lib/MatchService.php';
+require_once dirname(__DIR__).'/lib/match_helpers.php';
 
 
 
@@ -223,7 +227,37 @@ if ($pdo instanceof PDO) {
 
 
 
-    $skillsStmt = $pdo->prepare('SELECT nombre, anios_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anios_experiencia DESC, nombre ASC');
+
+    // Cargamos habilidades detectando din?micamente el nombre de la columna de experiencia.
+    $yearColumns = ['anios_experiencia', 'anos_experiencia', 'años_experiencia'];
+    $existingCols = [];
+    try {
+      $colStmt = $pdo->query('SHOW COLUMNS FROM candidato_habilidades');
+      if ($colStmt) {
+        $existingCols = $colStmt->fetchAll(PDO::FETCH_COLUMN, 0);
+      }
+    } catch (Throwable $e) {
+      $existingCols = [];
+    }
+
+    $yearCol = null;
+    foreach ($yearColumns as $col) {
+      if (in_array($col, $existingCols, true)) {
+        $yearCol = $col;
+        break;
+      }
+    }
+
+    if ($yearCol) {
+      $skillsStmt = $pdo->prepare(
+        "SELECT nombre, `{$yearCol}` AS exp_years\n         FROM candidato_habilidades\n         WHERE email = ?\n         ORDER BY exp_years DESC, nombre ASC"
+      );
+    } else {
+      // Si no hay columna de a?os, evitamos error y devolvemos nulos.
+      $skillsStmt = $pdo->prepare(
+        "SELECT nombre, NULL AS exp_years\n         FROM candidato_habilidades\n         WHERE email = ?\n         ORDER BY nombre ASC"
+      );
+    }
 
     $skillsStmt->execute([$userSession['email']]);
 
@@ -239,7 +273,7 @@ if ($pdo instanceof PDO) {
 
         if ($name === '') { continue; }
 
-        $years = $skill['anios_experiencia'];
+        $years = $skill['exp_years'];
 
         if ($years !== null && $years !== '') {
 
@@ -247,7 +281,7 @@ if ($pdo instanceof PDO) {
 
           $yearsLabel = rtrim(rtrim(number_format($yearsFloat, 1, '.', ''), '0'), '.');
 
-          $skills[] = sprintf('%s Â· %s %s', $name, $yearsLabel, $yearsFloat == 1.0 ? 'aÃ±o' : 'aÃ±os');
+          $skills[] = sprintf('%s - %s %s', $name, $yearsLabel, $yearsFloat == 1.0 ? 'año' : 'años');
 
         } else {
 
@@ -264,7 +298,6 @@ if ($pdo instanceof PDO) {
       }
 
     }
-
     if (!$profileData['skills']) {
 
       $skills = $splitList($row['habilidades'] ?? '');
@@ -337,9 +370,9 @@ if (!function_exists('dash_truncate_text')) {
 
   function dash_truncate_text(?string $text, int $limit = 200): string {
 
-    $text = trim((string)$text);
+    $text = fix_mojibake(trim((string)$text));
 
-    if ($text === '') { return 'Sin descripciÃ³n disponible.'; }
+    if ($text === '') { return 'Sin descripción disponible.'; }
 
     $lengthFn = function_exists('mb_strlen') ? 'mb_strlen' : 'strlen';
 
@@ -349,7 +382,7 @@ if (!function_exists('dash_truncate_text')) {
 
     $slice = $substrFn($text, 0, $limit - 1, 'UTF-8');
 
-    return rtrim($slice).'â¦';
+    return rtrim($slice).'…';
 
   }
 
@@ -413,7 +446,7 @@ if (!function_exists('dash_publication_info')) {
 
     if (!$value) {
 
-      return ['badge' => null, 'meta' => 'PublicaciÃ³n sin fecha', 'is_new' => false];
+      return ['badge' => null, 'meta' => 'Publicación sin fecha', 'is_new' => false];
 
     }
 
@@ -423,7 +456,7 @@ if (!function_exists('dash_publication_info')) {
 
     } catch (Throwable $e) {
 
-      return ['badge' => null, 'meta' => 'PublicaciÃ³n reciente', 'is_new' => false];
+      return ['badge' => null, 'meta' => 'Publicación reciente', 'is_new' => false];
 
     }
 
@@ -435,7 +468,7 @@ if (!function_exists('dash_publication_info')) {
 
     if ($isFuture) {
 
-      return ['badge' => 'PrÃ³xima', 'meta' => 'PublicaciÃ³n programada', 'is_new' => false];
+      return ['badge' => 'Próxima', 'meta' => 'Publicación programada', 'is_new' => false];
 
     }
 
@@ -457,13 +490,13 @@ if (!function_exists('dash_publication_info')) {
 
     if ($days === 1) {
 
-      return ['badge' => 'Hace 1 dÃ­a', 'meta' => 'Publicada hace 1 dÃ­a', 'is_new' => true];
+      return ['badge' => 'Hace 1 día', 'meta' => 'Publicada hace 1 día', 'is_new' => true];
 
     }
 
-    $meta = 'Publicada hace '.$days.' dÃ­as';
+    $meta = 'Publicada hace '.$days.' días';
 
-    $badge = $days <= 3 ? 'Nueva' : 'Hace '.$days.' dÃ­as';
+    $badge = $days <= 3 ? 'Nueva' : 'Hace '.$days.' días';
 
     return ['badge' => $badge, 'meta' => $meta, 'is_new' => $days <= 3];
 
@@ -474,46 +507,34 @@ if (!function_exists('dash_publication_info')) {
 
 
 if (!function_exists('dash_match_score')) {
-
   /**
-
+   * Cálculo unificado de match usando MatchService (mismos pesos y datos en todas las vistas).
    * @param array<string,mixed> $vacante
-
    * @param string[] $keywords
-
    * @param array<string,mixed> $profile
-
+   * @return float
    */
-
-  function dash_match_score(array $vacante, array $keywords, array $profile): int {
-
-    // Valor predeterminado (placeholder) mientras se integra la IA real.
-
-    // Ajusta este nÃºmero si deseas un default distinto a 0.
-
-    return 0;
-
+  function dash_match_score(array $vacante, array $keywords, array $profile): float {
+    global $pdo, $userSession;
+    if (!($pdo instanceof PDO)) { return 0.0; }
+    $email = isset($userSession['email']) ? (string)$userSession['email'] : '';
+    if ($email === '') { return 0.0; }
+    return ms_score($pdo, $vacante, $email);
   }
-
 }
+
 
 
 if (!function_exists('dash_ai_norm')) {
   function dash_ai_norm(array $vector): float {
-    $sum = 0.0;
-    foreach ($vector as $v) { $sum += $v * $v; }
-    return sqrt($sum);
+    return MatchService::norm($vector);
   }
 }
 
 
 if (!function_exists('dash_ai_cosine')) {
   function dash_ai_cosine(array $a, float $normA, array $b, float $normB): float {
-    if ($normA <= 0.0 || $normB <= 0.0) { return 0.0; }
-    $len = min(count($a), count($b));
-    $dot = 0.0;
-    for ($i = 0; $i < $len; $i++) { $dot += $a[$i] * $b[$i]; }
-    return $dot / ($normA * $normB);
+    return MatchService::cosine($a, $normA, $b, $normB);
   }
 }
 
@@ -526,33 +547,19 @@ if (!function_exists('dash_ai_weights')) {
 
 if (!function_exists('dash_ai_skill_overlap')) {
   function dash_ai_skill_overlap(array $candSkills, array $vacTags): int {
-    $cand = array_filter(array_map(static fn($v) => dash_lower(trim((string)$v)), $candSkills));
-    $vac  = array_filter(array_map(static fn($v) => dash_lower(trim((string)$v)), $vacTags));
-    $cand = array_values(array_unique($cand));
-    $vac  = array_values(array_unique($vac));
-    if (!$cand || !$vac) { return 20; }
-    $common = array_intersect($cand, $vac);
-    $max = max(count($cand), count($vac));
-    if ($max === 0) { return 20; }
-    return (int)round(count($common) / $max * 100);
+    return MatchService::skillOverlap($candSkills, $vacTags);
   }
 }
 
 if (!function_exists('dash_ai_required_years')) {
   function dash_ai_required_years(string $text): ?int {
-    $pattern = '/(\\d+)\\s*(?:anos|anios)/i';
-    if (preg_match($pattern, $text, $m)) {
-      return (int)$m[1];
-    }
-    return null;
+    return MatchService::requiredYears($text);
   }
 }
 
 if (!function_exists('dash_ai_exp_score')) {
   function dash_ai_exp_score(?int $required, ?int $candYears): int {
-    if ($required === null || $required <= 0 || $candYears === null) { return 20; }
-    if ($candYears >= $required) { return 100; }
-    return (int)round(max(0, ($candYears / $required) * 100));
+    return MatchService::expScore($required, $candYears);
   }
 }
 
@@ -562,22 +569,7 @@ if (!function_exists('dash_ai_clean_skills')) {
    * @return string[]
    */
   function dash_ai_clean_skills($skills): array {
-    if (is_string($skills)) {
-      $skills = preg_split('/[,;|]+/', $skills) ?: [];
-    }
-    if (!is_array($skills)) { return []; }
-    $out = [];
-    foreach ($skills as $skill) {
-      $s = trim((string)$skill);
-      if ($s === '') { continue; }
-      $s = preg_replace('/\\s*[·•]\\s*\\d+.*/u', '', $s);
-      $s = preg_replace('/\\d+\\s*(anos|anios|años)?/iu', '', $s);
-      $s = preg_replace('/\\s+anos?|\\s+anios?/iu', '', $s);
-      $s = trim(preg_replace('/\\s+/', ' ', (string)$s));
-      if ($s === '') { continue; }
-      $out[] = $s;
-    }
-    return array_values(array_unique($out));
+    return MatchService::cleanList($skills);
   }
 }
 
@@ -642,10 +634,10 @@ if (!function_exists('dash_ai_exp_score')) {
 function dash_ai_vacancy_text(array $vac): string
 {
     $parts = array_filter([
-        'TÃ­tulo: '.($vac['titulo'] ?? ''),
-        'DescripciÃ³n: '.($vac['descripcion'] ?? ''),
+        'Título: '.($vac['titulo'] ?? ''),
+        'Descripción: '.($vac['descripcion'] ?? ''),
         'Requisitos: '.($vac['requisitos'] ?? ''),
-        'Ãrea: '.($vac['area_nombre'] ?? ''),
+        'Área: '.($vac['area_nombre'] ?? ''),
         'Nivel: '.($vac['nivel_nombre'] ?? ''),
         'Modalidad: '.($vac['modalidad_nombre'] ?? ''),
         'Ciudad: '.($vac['ciudad'] ?? ''),
@@ -655,7 +647,7 @@ function dash_ai_vacancy_text(array $vac): string
 }
 
 /**
- * Genera embeddings para vacantes que no los tengan aÃºn.
+ * Genera embeddings para vacantes que no los tengan aún.
  *
  * @param array<int,string> $conditions
  * @param array<int,mixed>  $params
@@ -707,7 +699,7 @@ function dash_ai_generate_missing_embeddings(PDO $pdo, OpenAIClient $client, arr
                 ':norm' => $norm,
             ]);
         } catch (Throwable $e) {
-            // ContinÃºa con las demÃ¡s; no aborta toda la generaciÃ³n.
+            // Continúa con las demás; no aborta toda la generación.
             error_log('[AI] No se pudo generar embedding para vacante '.$vac['id'].': '.$e->getMessage());
         }
     }
@@ -723,116 +715,37 @@ if (!function_exists('dash_ai_recommendations')) {
    * @return array{items:array<int,array<string,mixed>>,error:?string}
    */
   function dash_ai_recommendations(PDO $pdo, array $profile, string $email, array $applied = [], int $limit = 8): array {
-    if (!class_exists('OpenAIClient')) {
-      return ['items' => [], 'error' => 'Falta el cliente OpenAI'];
+    $client = MatchService::getClient();
+    if (!$client) {
+      return ['items' => [], 'error' => 'Configura la variable OPENAI_API_KEY y el cliente OpenAI.'];
     }
 
-    $apiKey = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
-    if (trim((string)$apiKey) === '') {
-      return ['items' => [], 'error' => 'Configura la variable de entorno OPENAI_API_KEY.'];
-    }
-
-    $base = getenv('OPENAI_BASE') ?: 'https://api.openai.com/v1';
-    $model = getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-3-small';
+    $items = [];
 
     try {
-      $client = new OpenAIClient($apiKey, $base, $model);
-    } catch (Throwable $e) {
-      return ['items' => [], 'error' => 'No se pudo inicializar OpenAI: '.$e->getMessage()];
-    }
-
-    try {
-      $tableExists = $pdo->query("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'vacante_embeddings' LIMIT 1");
-      if (!$tableExists || !$tableExists->fetchColumn()) {
-        return ['items' => [], 'error' => 'La tabla vacante_embeddings no existe. Ejecuta las migraciones para crearla.'];
-      }
-    } catch (Throwable $e) {
-      return ['items' => [], 'error' => 'No se pudo verificar vacante_embeddings: '.$e->getMessage()];
-    }
-
-    try {
-      $profileText = dash_ai_profile_text($profile, $email);
-      $userVec = $client->embed($profileText);
-      $userNorm = dash_ai_norm($userVec);
-    } catch (Throwable $e) {
-      return ['items' => [], 'error' => 'No se pudo calcular el embedding del perfil: '.$e->getMessage()];
-    }
-
-    // Mostrar todas las vacantes publicadas/activas, sin filtrar por perfil, para que siempre aparezcan.
-    $conditions = ['v.estado IN ("publicada","activa","publicada ")'];
-    $params = [];
-
-    $baseSql = '
-      SELECT v.id, v.titulo, v.descripcion, v.requisitos, v.etiquetas, v.ciudad,
-             v.salario_min, v.salario_max, v.moneda, v.publicada_at, v.created_at,
-             e.id AS empresa_id, e.razon_social AS empresa_nombre,
-             a.nombre AS area_nombre, n.nombre AS nivel_nombre, m.nombre AS modalidad_nombre,
-             ve.embedding, ve.norm
-      FROM vacantes v
-      LEFT JOIN vacante_embeddings ve ON ve.vacante_id = v.id
-      LEFT JOIN empresas e ON e.id = v.empresa_id
-      LEFT JOIN areas a ON a.id = v.area_id
-      LEFT JOIN niveles n ON n.id = v.nivel_id
-      LEFT JOIN modalidades m ON m.id = v.modalidad_id
-      WHERE '.implode(' AND ', $conditions).'
-      ORDER BY COALESCE(v.publicada_at, v.created_at) DESC
-      LIMIT 200
-    ';
-
-    // Primero obtenemos vacantes aunque no tengan embedding, para generarlos si faltan
-    try {
-      $stmt = $pdo->prepare($baseSql);
-      $stmt->execute($params);
+      $stmt = $pdo->prepare(
+        'SELECT v.id, v.titulo, v.descripcion, v.requisitos, v.etiquetas, v.ciudad,
+                v.salario_min, v.salario_max, v.moneda, v.publicada_at, v.created_at,
+                e.id AS empresa_id, e.razon_social AS empresa_nombre,
+                a.nombre AS area_nombre, n.nombre AS nivel_nombre, m.nombre AS modalidad_nombre
+         FROM vacantes v
+         LEFT JOIN empresas e ON e.id = v.empresa_id
+         LEFT JOIN areas a ON a.id = v.area_id
+         LEFT JOIN niveles n ON n.id = v.nivel_id
+         LEFT JOIN modalidades m ON m.id = v.modalidad_id
+         WHERE v.estado IN ("publicada","activa","publicada ")
+         ORDER BY COALESCE(v.publicada_at, v.created_at) DESC
+         LIMIT 200'
+      );
+      $stmt->execute();
       $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
     } catch (Throwable $e) {
       return ['items' => [], 'error' => 'No se pudieron consultar vacantes: '.$e->getMessage()];
     }
 
-    // Genera embeddings faltantes hasta 50 vacantes
-    $missingIds = [];
-    foreach ($rows as $r) {
-      if (empty($r['embedding'])) {
-        $missingIds[] = (int)$r['id'];
-        if (count($missingIds) >= 50) { break; }
-      }
-    }
-    if ($missingIds) {
-      $cond = $conditions;
-      $paramsWithIds = $params;
-      // Genera embeddings solo para los IDs faltantes
-      $genErr = dash_ai_generate_missing_embeddings($pdo, $client, ['v.id IN ('.implode(',', array_fill(0, count($missingIds), '?')).')'], $missingIds, 50);
-      if ($genErr) {
-        return ['items' => [], 'error' => $genErr];
-      }
-      // Refresca filas con embeddings ahora presentes
-      try {
-        $stmt = $pdo->prepare($baseSql);
-        $stmt->execute($params);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-      } catch (Throwable $e) {
-        return ['items' => [], 'error' => 'No se pudieron consultar vacantes tras generar embeddings: '.$e->getMessage()];
-      }
-    }
-
-    $userSkills = dash_ai_clean_skills($profile['skills'] ?? []);
-    $items = [];
     foreach ($rows as $row) {
-      $embedding = json_decode((string)($row['embedding'] ?? ''), true);
-      if (!is_array($embedding)) { continue; }
-      $vacNorm = isset($row['norm']) ? (float)$row['norm'] : 0.0;
-      $cos = dash_ai_cosine($userVec, $userNorm, $embedding, $vacNorm);
-      $embedScore = max(0, min(1, $cos)) * 100;
-      $vacTags = dash_ai_clean_skills(dash_extract_tags($row['etiquetas'] ?? null));
-      $weights = dash_ai_weights(($row['descripcion'] ?? '').' '.($row['requisitos'] ?? ''));
-      $skillsScore = dash_ai_skill_overlap((array)$userSkills, $vacTags);
-      $reqYears = dash_ai_required_years(($row['descripcion'] ?? '').' '.($row['requisitos'] ?? ''));
-      $expScore = dash_ai_exp_score($reqYears, null);
-      $scorePct = round(
-        $weights['embed'] * $embedScore +
-        $weights['skills'] * $skillsScore +
-        $weights['exp'] * $expScore,
-        1
-      );
+      $vacData = ms_normalize_vac($row);
+      $scorePct = ms_score($pdo, $vacData, $email);
 
       $pubInfo = dash_publication_info($row['publicada_at'] ?? $row['created_at']);
       $metaParts = array_filter([
@@ -841,7 +754,7 @@ if (!function_exists('dash_ai_recommendations')) {
         $pubInfo['meta'],
       ]);
 
-      $tags = dash_extract_tags($row['etiquetas'] ?? null);
+      $tags = MatchService::cleanList(dash_extract_tags($row['etiquetas'] ?? null));
       $chips = array_values(array_filter([
         $row['nivel_nombre'] ?? null,
         $row['modalidad_nombre'] ?? null,
@@ -851,10 +764,10 @@ if (!function_exists('dash_ai_recommendations')) {
 
       $items[] = [
         'id' => (int)$row['id'],
-        'titulo' => $row['titulo'] ?? 'Oferta sin tï¿½ï¿½tulo',
+        'titulo' => $row['titulo'] ?? 'Oferta sin título',
         'empresa' => $row['empresa_nombre'] ?? 'Empresa confidencial',
         'empresa_id' => isset($row['empresa_id']) ? (int)$row['empresa_id'] : null,
-        'meta_line' => $metaParts ? implode(' ï¿½ï¿½ ', $metaParts) : $pubInfo['meta'],
+        'meta_line' => $metaParts ? implode(' · ', $metaParts) : $pubInfo['meta'],
         'badge' => $pubInfo['badge'],
         'chips' => $chips,
         'descripcion' => dash_truncate_text($row['descripcion'] ?? $row['requisitos'] ?? ''),
@@ -867,21 +780,12 @@ if (!function_exists('dash_ai_recommendations')) {
         ),
         'postulado' => isset($applied[(int)$row['id']]),
       ];
+      if (count($items) >= $limit) { break; }
     }
-
-    if (!$items) {
-      return ['items' => [], 'error' => 'No hay embeddings de vacantes. Genera embeddings antes de usar recomendaciones.'];
-    }
-
-    usort($items, static fn($a, $b) => $b['match'] <=> $a['match']);
-    // Mostrar todas las vacantes (aunque el match sea bajo) para que el usuario pueda re-aplicar o explorar.
-    // Si quieres limitar, ajusta $limit; por ahora no se recorta.
 
     return ['items' => $items, 'error' => null];
   }
 }
-
-
 if (!function_exists('dash_lower')) {
 
   function dash_lower(string $value): string {
@@ -903,12 +807,12 @@ if (!function_exists('dash_slugify')) {
     if ($value === '') { return ''; }
 
     static $replacements = [
-      'Ã¡' => 'a', 'Ã' => 'a', 'Ã ' => 'a', 'Ã' => 'a', 'Ã¤' => 'a', 'Ã' => 'a', 'Ã¢' => 'a', 'Ã' => 'a',
-      'Ã©' => 'e', 'Ã' => 'e', 'Ã¨' => 'e', 'Ã' => 'e', 'Ã«' => 'e', 'Ã' => 'e', 'Ãª' => 'e', 'Ã' => 'e',
-      'Ã­' => 'i', 'Ã' => 'i', 'Ã¬' => 'i', 'Ã' => 'i', 'Ã¯' => 'i', 'Ã' => 'i', 'Ã®' => 'i', 'Ã' => 'i',
-      'Ã³' => 'o', 'Ã' => 'o', 'Ã²' => 'o', 'Ã' => 'o', 'Ã¶' => 'o', 'Ã' => 'o', 'Ã´' => 'o', 'Ã' => 'o',
-      'Ãº' => 'u', 'Ã' => 'u', 'Ã¹' => 'u', 'Ã' => 'u', 'Ã¼' => 'u', 'Ã' => 'u', 'Ã»' => 'u', 'Ã' => 'u',
-      'Ã±' => 'n', 'Ã' => 'n',
+      'á' => 'a', 'Á' => 'a', 'à' => 'a', 'À' => 'a', 'ä' => 'a', 'Ä' => 'a', 'â' => 'a', 'Â' => 'a',
+      'é' => 'e', 'É' => 'e', 'è' => 'e', 'È' => 'e', 'ë' => 'e', 'Ë' => 'e', 'ê' => 'e', 'Ê' => 'e',
+      'í' => 'i', 'Í' => 'i', 'ì' => 'i', 'Ì' => 'i', 'ï' => 'i', 'Ï' => 'i', 'î' => 'i', 'Î' => 'i',
+      'ó' => 'o', 'Ó' => 'o', 'ò' => 'o', 'Ò' => 'o', 'ö' => 'o', 'Ö' => 'o', 'ô' => 'o', 'Ô' => 'o',
+      'ú' => 'u', 'Ú' => 'u', 'ù' => 'u', 'Ù' => 'u', 'ü' => 'u', 'Ü' => 'u', 'û' => 'u', 'Û' => 'u',
+      'ñ' => 'n', 'Ñ' => 'n',
     ];
     $value = strtr($value, $replacements);
 
@@ -970,7 +874,7 @@ if (!function_exists('dash_infer_experience_years')) {
 
     $content = trim((string)$text);
 
-    if ($content !== '' && preg_match('/(\\d+)\\s*\\+?\\s*(?:anos|anios)/i', $content, $matches)) {
+    if ($content !== '' && preg_match('/(\\d+)\\s*\\+?\\s*(?:años|años)/i', $content, $matches)) {
 
       return (int)$matches[1];
 
@@ -990,7 +894,7 @@ foreach ($profileData['skills'] as $skillText) {
 
   $normalized = strtolower((string)$skillText);
 
-  $normalized = preg_replace('/[^a-z0-9Ã¡Ã©Ã­Ã³ÃºÃ¼Ã±]+/u', ' ', $normalized ?? '');
+  $normalized = preg_replace('/[^a-z0-9áéíóúüñ]+/u', ' ', $normalized ?? '');
 
   foreach (preg_split('/\s+/', trim((string)$normalized)) as $token) {
 
@@ -1026,7 +930,7 @@ $modalidadOptions = [
 
   'remoto' => 'Remoto',
 
-  'hibrido' => 'HÃ­brido',
+  'hibrido' => 'Híbrido',
 
   'presencial' => 'Presencial',
 
@@ -1038,7 +942,7 @@ $contratoOptions = [
 
   'medio-tiempo' => 'Medio tiempo',
 
-  'practicas' => 'PrÃ¡cticas',
+  'practicas' => 'Prácticas',
 
   'por-proyecto' => 'Por proyecto',
 
@@ -1048,13 +952,13 @@ $experienceOptions = [
 
   '0' => '0 (primera experiencia)',
 
-  '1-2' => '1 a 2 aÃ±os',
+  '1-2' => '1 a 2 años',
 
-  '3-5' => '3 a 5 aÃ±os',
+  '3-5' => '3 a 5 años',
 
-  '6-9' => '6 a 9 aÃ±os',
+  '6-9' => '6 a 9 años',
 
-  '10+' => '10+ aÃ±os',
+  '10+' => '10+ años',
 
 ];
 
@@ -1137,9 +1041,7 @@ $filtersApplied = (
 
 
 $postulaciones = [];
-
 $appliedVacantes = [];
-
 $entrevistaCount = 0;
 
 
@@ -1154,7 +1056,7 @@ if ($pdo instanceof PDO) {
 
   try {
 
-    $postStmt = $pdo->prepare('SELECT vacante_id, estado FROM postulaciones WHERE candidato_email = ?');
+    $postStmt = $pdo->prepare('SELECT vacante_id, estado, match_score FROM postulaciones WHERE candidato_email = ?');
 
     $postStmt->execute([$userSession['email']]);
 
@@ -1166,21 +1068,17 @@ if ($pdo instanceof PDO) {
 
       $estadoPost = strtolower((string)($post['estado'] ?? ''));
 
-      // Permitir re-aplicar si la postulaciÃ³n quedÃ³ en no_seleccionado/rechazado
+      // Permitir re-aplicar si la postulación quedó en no_seleccionado/rechazado
       $estadoBloqueaReaplicar = !in_array($estadoPost, ['no_seleccionado', 'rechazado'], true);
 
       if ($vacId > 0 && $estadoBloqueaReaplicar) {
-
         $appliedVacantes[$vacId] = true;
-
+        if (isset($post['match_score'])) {
+        }
       }
-
       if ($estadoPost === 'entrevista') {
-
         $entrevistaCount++;
-
       }
-
     }
 
   } catch (Throwable $postsError) {
@@ -1223,13 +1121,13 @@ if ($pdo instanceof PDO) {
     $whereParts = [];
     $params = [];
 
-    // Buscar IDs canÃ³nicos de modalidad/contrato para filtrar por v.modalidad_id / v.tipo_contrato_id
+    // Buscar IDs canónicos de modalidad/contrato para filtrar por v.modalidad_id / v.tipo_contrato_id
     $modalidadIds = [];
     if ($filterModalidad) {
       $modNames = [];
       foreach ($filterModalidad as $slug) {
         if ($slug === 'remoto') { $modNames[] = 'remoto'; }
-        elseif ($slug === 'hibrido') { $modNames[] = 'hÃ­brido'; $modNames[] = 'hibrido'; }
+        elseif ($slug === 'hibrido') { $modNames[] = 'híbrido'; $modNames[] = 'hibrido'; }
         elseif ($slug === 'presencial') { $modNames[] = 'presencial'; }
       }
       if ($modNames) {
@@ -1251,7 +1149,7 @@ if ($pdo instanceof PDO) {
       foreach ($filterContrato as $slug) {
         if ($slug === 'tiempo-completo') { $conNames[] = 'tiempo completo'; }
         elseif ($slug === 'medio-tiempo') { $conNames[] = 'medio tiempo'; }
-        elseif ($slug === 'practicas') { $conNames[] = 'prÃ¡cticas'; $conNames[] = 'practicas'; }
+        elseif ($slug === 'practicas') { $conNames[] = 'prácticas'; $conNames[] = 'practicas'; }
         elseif ($slug === 'por-proyecto') { $conNames[] = 'por proyecto'; }
       }
       if ($conNames) {
@@ -1268,7 +1166,7 @@ if ($pdo instanceof PDO) {
     }
 
     if ($filterCiudadSlug !== '') {
-      // BÃºsqueda por ciudad bÃ¡sica, insensible a mayÃºsculas
+      // Búsqueda por ciudad básica, insensible a mayúsculas
       $whereParts[] = ' AND LOWER(v.ciudad) LIKE ?';
       $params[] = '%'.strtolower($filterCiudad).'%' ;
     }
@@ -1278,7 +1176,7 @@ if ($pdo instanceof PDO) {
       $params[] = $filterSalario;
     }
 
-    // Aplica orden y lÃ­mite (mayor cobertura cuando hay filtros)
+    // Aplica orden y límite (mayor cobertura cuando hay filtros)
     $limit = ($filterModalidad || $filterContrato || $filterCiudadSlug !== '' || $filterSalario !== null || $filterExperiencia !== '') ? 200 : 20;
     $sql = $baseSql.implode('', $whereParts).' ORDER BY COALESCE(v.publicada_at, v.created_at) DESC LIMIT '.$limit;
 
@@ -1286,7 +1184,7 @@ if ($pdo instanceof PDO) {
     $vacStmt->execute($params);
     if ($vacStmt) {
       while ($row = $vacStmt->fetch(PDO::FETCH_ASSOC)) {
-        $tags = dash_extract_tags($row['etiquetas'] ?? null);
+        $tags = dash_ai_clean_skills(dash_extract_tags($row['etiquetas'] ?? null));
 
         $tagsLower = array_map('strtolower', $tags);
 
@@ -1400,12 +1298,12 @@ if ($pdo instanceof PDO) {
 
           'id' => (int)$row['id'],
 
-          'titulo' => $row['titulo'] ?? 'Oferta sin tÃ­tulo',
+          'titulo' => $row['titulo'] ?? 'Oferta sin título',
 
           'empresa' => $row['empresa_nombre'] ?? 'Empresa confidencial',
           'empresa_id' => isset($row['empresa_id']) ? (int)$row['empresa_id'] : null,
 
-          'meta_line' => $metaParts ? implode(' Â· ', $metaParts) : $pubInfo['meta'],
+          'meta_line' => $metaParts ? implode(' · ', $metaParts) : $pubInfo['meta'],
 
           'badge' => $pubInfo['badge'],
 
@@ -1451,7 +1349,7 @@ if ($pdo instanceof PDO) {
       $vacStmt2->execute($paramsRelax);
       $vacantesPool = [];
       while ($row = $vacStmt2->fetch(PDO::FETCH_ASSOC)) {
-        $tags = dash_extract_tags($row['etiquetas'] ?? null);
+        $tags = dash_ai_clean_skills(dash_extract_tags($row['etiquetas'] ?? null));
         $tagsLower = array_map('strtolower', $tags);
         $pubInfo = dash_publication_info($row['publicada_at'] ?? $row['created_at']);
         if ($pubInfo['is_new']) { $nuevasVacantes++; }
@@ -1499,10 +1397,10 @@ if ($pdo instanceof PDO) {
         );
         $vacantesPool[] = [
           'id' => (int)$row['id'],
-          'titulo' => $row['titulo'] ?? 'Oferta sin tÃ­tulo',
+          'titulo' => $row['titulo'] ?? 'Oferta sin título',
           'empresa' => $row['empresa_nombre'] ?? 'Empresa confidencial',
           'empresa_id' => isset($row['empresa_id']) ? (int)$row['empresa_id'] : null,
-          'meta_line' => $metaParts ? implode(' Â· ', $metaParts) : $pubInfo['meta'],
+          'meta_line' => $metaParts ? implode(' · ', $metaParts) : $pubInfo['meta'],
           'badge' => $pubInfo['badge'],
           'chips' => $chips,
           'descripcion' => dash_truncate_text($row['descripcion'] ?? $row['requisitos'] ?? ''),
@@ -1721,7 +1619,7 @@ $levelLabel = $profileData['level'] ?? null;
 
         <h1>Hola, <?=htmlspecialchars($profileData['firstName'] ?? $profileData['fullName'], ENT_QUOTES, 'UTF-8');?></h1>
 
-        <p class="muted">Estas son tus <strong>recomendaciones personalizadas</strong> segÃºn tu perfil y preferencias.</p>
+        <p class="muted">Estas son tus <strong>recomendaciones personalizadas</strong> según tu perfil y preferencias.</p>
 
       </div>
 
@@ -1861,7 +1759,7 @@ $levelLabel = $profileData['level'] ?? null;
 
         <div class="field">
 
-          <label for="experiencia">AÃ±os de experiencia</label>
+          <label for="experiencia">Años de experiencia</label>
 
           <select id="experiencia" name="experiencia">
 
@@ -1897,7 +1795,7 @@ $levelLabel = $profileData['level'] ?? null;
 
           <label for="ciudad">Ciudad</label>
 
-          <input id="ciudad" name="ciudad" type="text" placeholder="BogotÃ¡" value="<?=htmlspecialchars($filterCiudad, ENT_QUOTES, 'UTF-8'); ?>" />
+          <input id="ciudad" name="ciudad" type="text" placeholder="Bogotá" value="<?=htmlspecialchars($filterCiudad, ENT_QUOTES, 'UTF-8'); ?>" />
 
         </div>
 
@@ -1921,7 +1819,7 @@ $levelLabel = $profileData['level'] ?? null;
 
         <h3>Consejo</h3>
 
-        <p class="muted">Mejora tu match agregando 3â5 <strong>habilidades clave</strong> y actualizando tu CV.</p>
+        <p class="muted">Mejora tu match agregando 3–5 <strong>habilidades clave</strong> y actualizando tu CV.</p>
 
       </div>
 
@@ -2004,7 +1902,7 @@ $levelLabel = $profileData['level'] ?? null;
             </div>
 
             <div class="meta" style="display:flex; flex-wrap:wrap; gap:.45rem; align-items:center;">
-              <span><strong><?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?></strong> Â· <?=htmlspecialchars($vacante['meta_line'], ENT_QUOTES, 'UTF-8'); ?></span>
+              <span><strong><?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?></strong> · <?=htmlspecialchars($vacante['meta_line'], ENT_QUOTES, 'UTF-8'); ?></span>
               <?php if (!empty($vacante['empresa_id'])): ?>
                 <a class="btn btn-ghost" style="padding:0.2rem 0.9rem; font-size:0.85rem;" href="index.php?view=PerfilEmpresaVistaCandidato&empresa_id=<?= (int)$vacante['empresa_id']; ?>">Ver perfil</a>
               <?php endif; ?>
@@ -2058,7 +1956,7 @@ $levelLabel = $profileData['level'] ?? null;
 
               <?php else: ?>
 
-                <span class="why-item">Revisa la descripciÃ³n</span>
+                <span class="why-item">Revisa la descripción</span>
 
               <?php endif; ?>
 
@@ -2102,9 +2000,9 @@ $levelLabel = $profileData['level'] ?? null;
 
             <?= $filtersApplied
 
-              ? 'Ajusta los filtros o lÃ­mpialos para ver mÃ¡s oportunidades.'
+              ? 'Ajusta los filtros o límpialos para ver más oportunidades.'
 
-              : 'Actualiza tus preferencias o vuelve mÃ¡s tarde para ver nuevas oportunidades.'; ?>
+              : 'Actualiza tus preferencias o vuelve más tarde para ver nuevas oportunidades.'; ?>
 
           </p>
 
@@ -2142,7 +2040,7 @@ $levelLabel = $profileData['level'] ?? null;
 
           ]);
 
-          $headlineText = $headlineParts ? implode(' Â· ', $headlineParts) : 'Completa tu perfil profesional';
+          $headlineText = $headlineParts ? implode(' · ', $headlineParts) : 'Completa tu perfil profesional';
 
         ?>
 
@@ -2208,7 +2106,7 @@ $levelLabel = $profileData['level'] ?? null;
 
             <?php else: ?>
 
-              <span class="chip">AÃ±ade habilidades clave</span>
+              <span class="chip">Añade habilidades clave</span>
 
             <?php endif; ?>
 

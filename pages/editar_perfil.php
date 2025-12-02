@@ -77,7 +77,7 @@ $form = [
   'disponibilidad'   => '',
   'estudios'         => '',
   'institucion'      => '',
-  'anios'            => '',
+  'años'            => '',
   'area_estudio'     => '',
   'situacion'        => '',
   'idiomas'          => '',
@@ -136,7 +136,7 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
           cp.habilidades,
           cp.resumen,
           cp.institucion,
-          cp.anios_experiencia,
+          COALESCE(cp.anios_experiencia, cp.anos_experiencia, cp.a?os_experiencia) AS anos_experiencia,
           cp.visible_empresas,
           a.nombre  AS area_nombre,
           n.nombre  AS nivel_nombre,
@@ -164,7 +164,7 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
       $form['disponibilidad'] = trim((string)($prof['disponibilidad_nombre'] ?? ''));
       $form['estudios'] = trim((string)($prof['estudios_nombre'] ?? ''));
       $form['institucion'] = trim((string)($prof['institucion'] ?? ''));
-      $form['anios'] = ep_bucket_experience(isset($prof['anios_experiencia']) ? (int)$prof['anios_experiencia'] : null);
+      $form['a?os'] = ep_bucket_experience(isset($prof['anos_experiencia']) ? (int)$prof['anos_experiencia'] : null);
       if (empty($form['perfil']) && !empty($prof['resumen'])) {
         $form['perfil'] = trim((string)$prof['resumen']);
       }
@@ -177,12 +177,12 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
   }
 
   try {
-    $skillStmt = $pdo->prepare('SELECT nombre, anios_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anios_experiencia DESC, nombre ASC');
+    $skillStmt = $pdo->prepare('SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anos_experiencia DESC, nombre ASC');
     $skillStmt->execute([$candidateEmail]);
     foreach ($skillStmt->fetchAll(PDO::FETCH_ASSOC) as $skill) {
       $skills[] = [
         'nombre' => trim((string)$skill['nombre']),
-        'anios'  => ep_format_years($skill['anios_experiencia'] ?? null),
+        'a?os'  => ep_format_years($skill['anos_experiencia'] ?? null),
       ];
     }
   } catch (Throwable $e) {
@@ -200,7 +200,7 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
       ];
     }
 
-    $expStmt = $pdo->prepare('SELECT id, cargo, empresa, periodo, anios_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC');
+    $expStmt = $pdo->prepare('SELECT id, cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC');
     $expStmt->execute([$candidateEmail]);
     foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
       $expId = (int)$exp['id'];
@@ -208,7 +208,7 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
         'cargo' => trim((string)$exp['cargo']),
         'empresa' => trim((string)$exp['empresa']),
         'periodo' => trim((string)$exp['periodo']),
-        'anios' => ep_format_years($exp['anios_experiencia'] ?? null),
+        'a?os' => ep_format_years($exp['anos_experiencia'] ?? null),
         'descripcion' => trim((string)$exp['descripcion']),
         'soporte' => $expCertMap[$expId] ?? null,
       ];
@@ -258,8 +258,8 @@ if ($candidateEmail !== '' && ($pdo instanceof PDO)) {
 $flash = $_SESSION['flash_edit_profile'] ?? null;
 unset($_SESSION['flash_edit_profile']);
 
-if (!$skills) { $skills = [['nombre' => '', 'anios' => '']]; }
-if (!$experiencias) { $experiencias = [['cargo'=>'','empresa'=>'','periodo'=>'','anios'=>'','descripcion'=>'','soporte'=>null]]; }
+if (!$skills) { $skills = [['nombre' => '', 'años' => '']]; }
+if (!$experiencias) { $experiencias = [['cargo'=>'','empresa'=>'','periodo'=>'','años'=>'','descripcion'=>'','soporte'=>null]]; }
 if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','descripcion'=>'','soporte'=>null]]; }
 ?>
 
@@ -419,7 +419,7 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
                 </div>
                 <div class="field">
                   <label for="skill_years_<?=$i?>">Años de experiencia</label>
-                  <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($skill['anios']); ?>"/>
+                  <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($skill['años']); ?>"/>
                 </div>
                 <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
                   <?php if ($i > 0): ?><button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button><?php endif; ?>
@@ -460,7 +460,7 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
                 </div>
                 <div class="field">
                   <label for="exp_years_<?=$i?>">Años de experiencia</label>
-                  <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($exp['anios']); ?>"/>
+                  <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($exp['años']); ?>"/>
                 </div>
               </div>
               <div class="field">
@@ -628,11 +628,11 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
             <input id="institucion" name="institucion" type="text" value="<?=ep_e($form['institucion']); ?>" placeholder="Ej: SENA" />
           </div>
           <div class="field">
-            <label for="anios">Años de experiencia total</label>
-            <select id="anios" name="anios">
+            <label for="años">Años de experiencia total</label>
+            <select id="años" name="años">
               <option value="">Selecciona</option>
               <?php foreach ($experienceRanges as $range): ?>
-                <option value="<?=$range; ?>"<?=ep_selected($form['anios'], $range); ?>><?=$range; ?></option>
+                <option value="<?=$range; ?>"<?=ep_selected($form['años'], $range); ?>><?=$range; ?></option>
               <?php endforeach; ?>
             </select>
           </div>

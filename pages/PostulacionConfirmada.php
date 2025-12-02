@@ -2,9 +2,11 @@
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) { session_start(); }
 require __DIR__.'/db.php';
+require_once __DIR__.'/../lib/EncodingHelper.php';
 require_once __DIR__.'/../lib/postulacion_events.php';
+require_once __DIR__.'/../lib/MatchService.php';
 // Utilidad de escape
-if (!function_exists('e')) { function e(?string $v): string { return htmlspecialchars($v ?? '', ENT_QUOTES, 'UTF-8'); } }
+if (!function_exists('e')) { function e(?string $v): string { return htmlspecialchars(fix_mojibake($v ?? ''), ENT_QUOTES, 'UTF-8'); } }
 if (!function_exists('pc_human_diff')) {
   function pc_human_diff(?string $date): string {
     if (!$date) { return 'Reciente'; }
@@ -106,7 +108,6 @@ if ($vacanteId && ($pdo instanceof PDO)) {
     $stmt->execute([$vacanteId, $email]);
     if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
       $estadoPostulacion = strtolower((string)($row['estado'] ?? 'recibida'));
-      $match = isset($row['match_score']) ? (int)$row['match_score'] : 0;
       $titulo = $row['titulo'] ?: 'Oferta sin título';
       $empresa = $row['empresa_nombre'] ?: 'Empresa confidencial';
       $ubicacion = $row['ciudad'] ?: 'Remoto';
@@ -122,6 +123,16 @@ if ($vacanteId && ($pdo instanceof PDO)) {
       $tags = array_map('trim', explode(',', (string)($row['etiquetas'] ?? '')));
       $coincidencias = array_slice(array_filter($tags), 0, 3);
       $advertencias = [];
+      $vacData = [
+        'id' => (int)$vacanteId,
+        'titulo' => $row['titulo'] ?? '',
+        'descripcion' => $row['descripcion'] ?? '',
+        'requisitos' => $row['requisitos'] ?? '',
+        'etiquetas' => $row['etiquetas'] ?? '',
+        'ciudad' => $row['ciudad'] ?? '',
+      ];
+      $matchResult = MatchService::scoreFor($pdo, $vacData, $email);
+      $match = (int)round($matchResult['score']);
       // Progreso y paso actual en función del estado
       $mapPaso = [
         'recibida'        => 1,
@@ -171,7 +182,7 @@ if ($vacanteId && ($pdo instanceof PDO)) {
   <!-- Mensaje de confirmación -->
   <section class="card p-24 space-y-16">
     <div class="success">
-      <div class="dot">✓</div>
+      <div class="dot"></div>
       <div>
         <h1 class="h5 m-0">¡Listo! Tu postulación fue enviada</h1>
         <p class="muted m-0">Hemos recibido tu postulación a <strong class="text-strong"><?= e($titulo) ?></strong> en <?= e($empresa) ?>. Te enviaremos actualizaciones y podrás seguir el estado desde <em>Mis postulaciones</em>.</p>
@@ -276,7 +287,7 @@ if ($vacanteId && ($pdo instanceof PDO)) {
             <?php endforeach; ?>
           </ul>
         <?php else: ?>
-          <p class="muted m-0">Te avisaremos aqui cuando la empresa avance tu postulacion.</p>
+          <p class="muted m-0">Te avisaremos aquí cuando la empresa avance tu postulación.</p>
         <?php endif; ?>
       </div>
 

@@ -121,10 +121,10 @@ if (($pdo instanceof PDO) && $targetEmail) {
       }
 
       $skillsStmt = $pdo->prepare(
-        'SELECT nombre, anios_experiencia
+        'SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia
            FROM candidato_habilidades
           WHERE email = ?
-          ORDER BY anios_experiencia DESC, nombre ASC'
+          ORDER BY anos_experiencia DESC, nombre ASC'
       );
       $skillsStmt->execute([$targetEmail]);
       $skillRecords = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -135,11 +135,11 @@ if (($pdo instanceof PDO) && $targetEmail) {
           if ($name === '') {
             continue;
           }
-          $years = $skill['anios_experiencia'];
+          $years = $skill['anos_experiencia'];
           if ($years !== null && $years !== '') {
             $yearsFloat = (float)$years;
             $yearsLabel = rtrim(rtrim(number_format($yearsFloat, 1, '.', ''), '0'), '.');
-            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'anio' : 'anios');
+            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'a?o' : 'a?os');
           } else {
             $skills[] = $name;
           }
@@ -159,7 +159,7 @@ if (($pdo instanceof PDO) && $targetEmail) {
     }
 
     $expStmt = $pdo->prepare(
-      'SELECT cargo, empresa, periodo, anios_experiencia, descripcion
+      'SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia, descripcion
          FROM candidato_experiencias
         WHERE email = ?
         ORDER BY orden ASC, created_at ASC'
@@ -172,7 +172,7 @@ if (($pdo instanceof PDO) && $targetEmail) {
           'cargo'  => $exp['cargo'] ?: 'Experiencia',
           'empresa'=> $exp['empresa'] ?: '',
           'periodo'=> $exp['periodo'] ?: '',
-          'anios'  => $exp['anios_experiencia'],
+          'a?os'  => $exp['anos_experiencia'],
           'desc'   => $exp['descripcion'] ?: '',
         ];
       }
@@ -243,23 +243,23 @@ if (!$viewerIsEmpresa) {
             count($expPayload['cargos'] ?? []),
             count($expPayload['empresas'] ?? []),
             count($expPayload['periodos'] ?? []),
-            count($expPayload['anios'] ?? []),
+            count($expPayload['años'] ?? []),
             count($expPayload['descripciones'] ?? [])
           );
           for ($i = 0; $i < $expCount; $i++) {
             $cargo  = trim((string)($expPayload['cargos'][$i] ?? ''));
             $empresa= trim((string)($expPayload['empresas'][$i] ?? ''));
             $periodo= trim((string)($expPayload['periodos'][$i] ?? ''));
-            $anios  = trim((string)($expPayload['anios'][$i] ?? ''));
+            $años  = trim((string)($expPayload['años'][$i] ?? ''));
             $desc   = trim((string)($expPayload['descripciones'][$i] ?? ''));
-            if ($cargo === '' && $empresa === '' && $periodo === '' && $desc === '' && $anios === '') {
+            if ($cargo === '' && $empresa === '' && $periodo === '' && $desc === '' && $años === '') {
               continue;
             }
             $experiencias[] = [
               'cargo'   => $cargo !== '' ? $cargo : 'Experiencia',
               'empresa' => $empresa,
               'periodo' => $periodo,
-              'anios'   => $anios,
+              'años'   => $años,
               'desc'    => $desc,
             ];
           }
@@ -268,16 +268,16 @@ if (!$viewerIsEmpresa) {
             $cargo = trim((string)($exp['cargo'] ?? ''));
             $empresa = trim((string)($exp['empresa'] ?? ''));
             $periodo = trim((string)($exp['periodo'] ?? ''));
-            $anios = trim((string)($exp['anios'] ?? ''));
+            $años = trim((string)($exp['años'] ?? ''));
             $desc = trim((string)($exp['desc'] ?? ''));
-            if ($cargo === '' && $empresa === '' && $periodo === '' && $anios === '' && $desc === '') {
+            if ($cargo === '' && $empresa === '' && $periodo === '' && $años === '' && $desc === '') {
               continue;
             }
             $experiencias[] = [
               'cargo'   => $cargo !== '' ? $cargo : 'Experiencia',
               'empresa' => $empresa,
               'periodo' => $periodo,
-              'anios'   => $anios,
+              'años'   => $años,
               'desc'    => $desc,
             ];
           }
@@ -345,7 +345,7 @@ $perfil['experiencias'] = array_values(array_filter(
       $exp['cargo'] ?? '',
       $exp['empresa'] ?? '',
       $exp['periodo'] ?? '',
-      isset($exp['anios']) ? (string)$exp['anios'] : '',
+      isset($exp['años']) ? (string)$exp['años'] : '',
       $exp['desc'] ?? '',
     ]);
     return implode('', $values) !== '';
@@ -446,7 +446,7 @@ $displayedError = false;
                 <?php
                   $labels = array_filter([
                     $exp['periodo'] ?? '',
-                    isset($exp['anios']) && $exp['anios'] !== '' ? ($exp['anios'].' anios') : null,
+                    isset($exp['años']) && $exp['años'] !== '' ? ($exp['años'].' años') : null,
                   ]);
                 ?>
                 <?php if ($labels): ?>
