@@ -5,6 +5,7 @@ class OpenAIClient
     private string $apiKey;
     private string $baseUrl;
     private string $embeddingModel;
+    private string $chatModel;
     private int $timeout;
 
     public function __construct(
@@ -16,6 +17,7 @@ class OpenAIClient
         $this->apiKey = trim($apiKey);
         $this->baseUrl = rtrim($baseUrl, '/');
         $this->embeddingModel = $embeddingModel;
+        $this->chatModel = getenv('OPENAI_CHAT_MODEL') ?: 'gpt-4o-mini';
         $this->timeout = $timeout;
 
         if ($this->apiKey === '') {
@@ -66,5 +68,55 @@ class OpenAIClient
         }
 
         return array_map('floatval', $embedding);
+    }
+
+    /**
+     * Genera texto usando el endpoint de chat/completions.
+     */
+    public function chat(string $prompt, int $maxTokens = 320): string
+    {
+        $payload = json_encode([
+            'model' => $this->chatModel,
+            'messages' => [
+                ['role' => 'system', 'content' => 'Eres un asistente que resume y evalúa candidatos en español de forma concisa.'],
+                ['role' => 'user', 'content' => $prompt],
+            ],
+            'max_tokens' => $maxTokens,
+            'temperature' => 0.4,
+        ]);
+
+        $ch = curl_init($this->baseUrl.'/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: ' . 'Bearer ' . $this->apiKey,
+            ],
+            CURLOPT_POSTFIELDS => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $this->timeout,
+        ]);
+
+        $response = curl_exec($ch);
+        if ($response === false) {
+            $err = curl_error($ch);
+            curl_close($ch);
+            throw new RuntimeException('cURL error: '.$err);
+        }
+        $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $data = json_decode($response, true);
+        if ($status >= 400) {
+            $msg = $data['error']['message'] ?? 'API error '.$status;
+            throw new RuntimeException($msg);
+        }
+
+        $content = $data['choices'][0]['message']['content'] ?? null;
+        if (!is_string($content) || trim($content) === '') {
+            throw new RuntimeException('Respuesta vacía del modelo de chat');
+        }
+
+        return trim($content);
     }
 }

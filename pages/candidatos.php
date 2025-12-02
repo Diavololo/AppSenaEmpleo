@@ -430,6 +430,65 @@ if (!function_exists('cd_ai_candidate_text')) {
 
   }
 
+if (!function_exists('cd_ai_eval_candidate')) {
+  /**
+   * Genera evaluaci?n breve (resumen/datos) para un candidato usando IA (solo top).
+   * @return array{resumen:string,datos:string}
+   */
+  function cd_ai_eval_candidate(?OpenAIClient $aiClient, array $vac, array $cand, float $score, int $rank): array {
+    $vacId = isset($vac['id']) ? (int)$vac['id'] : (int)($vac['vacante_id'] ?? 0);
+    $email = (string)($cand['email'] ?? '');
+    static $cache = [];
+    $cacheKey = $vacId.'|'.$email;
+    if (isset($cache[$cacheKey])) { return $cache[$cacheKey]; }
+
+    $scoreText = number_format($score, 1);
+    $fallbackResumen = "Evaluaci?n no disponible. Puntaje actual: {$scoreText}%. Falta informaci?n para generar un an?lisis.";
+    $fallbackDatos = "Datos faltantes o IA no disponible. Aporta resumen, habilidades y experiencia para un mejor match.";
+
+    if (!$aiClient || $email === '') {
+      return $cache[$cacheKey] = ['resumen' => $fallbackResumen, 'datos' => $fallbackDatos];
+    }
+
+    $vacTitle = trim((string)($vac['titulo'] ?? 'Vacante'));
+    $vacReq = trim((string)($vac['requisitos'] ?? '') . ' ' . (string)($vac['descripcion'] ?? ''));
+    $vacTags = MatchService::cleanList($vac['etiquetas'] ?? '');
+    $candSkills = cd_ai_clean_skills($cand['habilidades'] ?? '');
+    $candResumen = trim((string)($cand['resumen'] ?? ''));
+    $candRole = trim((string)($cand['rol_deseado'] ?? ''));
+    $candNivel = trim((string)($cand['nivel_nombre'] ?? ''));
+    $candCiudad = trim((string)($cand['ciudad'] ?? ''));
+    $candExp = $cand['anios_experiencia'] ?? null;
+    $candExp = is_numeric($candExp) ? (int)$candExp : null;
+
+    $prompt = "Act?a como reclutador t?cnico y eval?a al candidato en espa?ol. "
+      ."Match actual: {$scoreText}%, ranking: Top {$rank}. "
+      ."Vacante: {$vacTitle}. Requisitos/desc: {$vacReq}. Etiquetas: ".implode(', ', $vacTags).". "
+      ."Candidato: Rol deseado {$candRole}; Nivel {$candNivel}; Ciudad {$candCiudad}; "
+      ."A?os experiencia ".($candExp !== null ? $candExp : 'desconocido')."; "
+      ."Skills: ".implode(', ', $candSkills)."; Resumen: {$candResumen}. "
+      ."Responde en dos p?rrafos (m?x 120 palabras): "
+      ."1) Resumen del ajuste (fortalezas y brechas clave). "
+      ."2) Datos: explica por qu? es apto o no, menciona brechas y datos faltantes si los hay.";
+
+    try {
+      $raw = $aiClient->chat($prompt, 320);
+      $parts = preg_split('/\n{2,}/', trim($raw), 2);
+      $resumen = trim($parts[0] ?? '');
+      $datos = trim($parts[1] ?? '');
+      if ($resumen === '' && $datos === '') {
+        $resumen = $fallbackResumen;
+        $datos = $fallbackDatos;
+      }
+      return $cache[$cacheKey] = ['resumen' => $resumen, 'datos' => $datos];
+    } catch (Throwable $e) {
+      error_log('[candidatos] eval IA fallo: '.$e->getMessage());
+      return $cache[$cacheKey] = ['resumen' => $fallbackResumen, 'datos' => $fallbackDatos];
+    }
+  }
+}
+
+
 }
 
 
@@ -1248,6 +1307,11 @@ unset($_SESSION['flash_candidatos']);
               $calcScore = $cand['match_score_calc'] ?? $cand['match_score'] ?? null;
               $score = $calcScore !== null ? max(0.0, min(100.0, (float)$calcScore)) : 0.0;
 
+              $iaEval = ['resumen' => '', 'datos' => ''];
+              if ($rank <= 3) {
+                $iaEval = cd_ai_eval_candidate($aiClient, $vac ?? [], $cand, (float)$score, $rank);
+              }
+
               $tags = cd_split_tags($cand['habilidades'] ?? '');
 
               $displayTags = array_slice($tags, 0, 6);
@@ -1342,7 +1406,11 @@ unset($_SESSION['flash_candidatos']);
 
                   <strong class="muted">Resumen</strong>
 
-                  <p class="muted" style="margin-top:.35rem;"><?=cd_e($cand['resumen'] ?? ''); ?></p>
+                  <?php
+                    $resumenIA = $iaEval['resumen'] ?? '';
+                    if ($resumenIA === '') { $resumenIA = $cand['resumen'] ?? ''; }
+                  ?>
+                  <p class="muted" style="margin-top:.35rem;"><?=cd_e($resumenIA); ?></p>
 
                 </div>
 
@@ -1350,15 +1418,17 @@ unset($_SESSION['flash_candidatos']);
 
                   <strong class="muted">Datos</strong>
 
-                  <p class="muted" style="margin-top:.35rem;">
-
-                    <?php if (!empty($cand['nivel_nombre'])): ?>Nivel: <?=cd_e((string)$cand['nivel_nombre']); ?><br><?php endif; ?>
-
-                    <?php if (!empty($cand['estudios_nombre'])): ?>Estudios: <?=cd_e((string)$cand['estudios_nombre']); ?><br><?php endif; ?>
-
-                    <?php if (!empty($cand['disponibilidad_nombre'])): ?>Disponibilidad: <?=cd_e((string)$cand['disponibilidad_nombre']); ?><?php endif; ?>
-
-                  </p>
+                  <?php
+                    $datosIA = $iaEval['datos'] ?? '';
+                    if ($datosIA === '') {
+                      $datosIA = trim(
+                        (!empty($cand['nivel_nombre']) ? 'Nivel: '.$cand['nivel_nombre']."\n" : '').
+                        (!empty($cand['estudios_nombre']) ? 'Estudios: '.$cand['estudios_nombre']."\n" : '').
+                        (!empty($cand['disponibilidad_nombre']) ? 'Disponibilidad: '.$cand['disponibilidad_nombre'] : '')
+                      );
+                    }
+                  ?>
+                  <p class="muted" style="margin-top:.35rem; white-space:pre-line;"><?=cd_e($datosIA); ?></p>
 
                 </div>
 
