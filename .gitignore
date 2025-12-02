@@ -3,3 +3,6 @@ uploads/
 BaseDatos.zip
 tmp_script.py
 tools/ffmpeg-release-essentials.zip
+.env
+*.env
+laravel-app/.env
