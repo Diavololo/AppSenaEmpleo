@@ -105,6 +105,16 @@ if (is_file($openaiClientFile)) {
 }
 require_once dirname(__DIR__).'/lib/MatchService.php';
 require_once dirname(__DIR__).'/lib/match_helpers.php';
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
+
+$docAnalyzer = null;
+try {
+  $docAnalyzer = new DocumentAnalyzer(MatchService::getClient());
+} catch (Throwable $e) {
+  $docAnalyzer = new DocumentAnalyzer(null);
+  error_log('[dashboard] doc analyzer fallback: '.$e->getMessage());
+}
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
 
 
@@ -801,6 +811,8 @@ if (!function_exists('dash_ai_recommendations')) {
     foreach ($rows as $row) {
       $vacData = ms_normalize_vac($row);
       $scorePct = ms_score($pdo, $vacData, $email);
+      $docFactor = isset($profile['doc_score']) ? (float)$profile['doc_score'] : 1.0;
+      $scorePct = max(0.0, min(100.0, $scorePct * $docFactor));
 
       $pubInfo = dash_publication_info($row['publicada_at'] ?? $row['created_at']);
       $metaParts = array_filter([
@@ -979,6 +991,25 @@ if (!$candidateKeywords && !empty($profileData['headline'])) {
 
 $candidateKeywords = array_values(array_unique($candidateKeywords));
 
+$docEvidence = [
+  'score' => 1.0,
+  'flags' => [],
+  'cv_verified' => false,
+  'edu_total' => 0,
+  'edu_verified' => 0,
+  'exp_total' => 0,
+  'exp_verified' => 0,
+];
+if ($pdo instanceof PDO && $docAnalyzer) {
+  try {
+    $docEvidence = $docAnalyzer->candidateEvidence($pdo, $userSession['email'], $profileData);
+  } catch (Throwable $e) {
+    error_log('[dashboard] evidence: '.$e->getMessage());
+  }
+}
+$profileData['doc_score'] = $docEvidence['score'] ?? 1.0;
+$profileData['doc_flags'] = $docEvidence['flags'] ?? [];
+$profileData['cv_verified'] = $docEvidence['cv_verified'] ?? $profileData['cv_uploaded'] ?? false;
 
 
 $modalidadOptions = [];
@@ -1255,6 +1286,8 @@ if ($pdo instanceof PDO) {
         $row['tags_lower'] = $tagsLower;
 
         $matchScore = dash_match_score($row, $candidateKeywords, $profileData);
+        $docFactor = isset($profileData['doc_score']) ? (float)$profileData['doc_score'] : 1.0;
+        $matchScore = max(0.0, min(100.0, $matchScore * $docFactor));
 
         $ciudadSlug = dash_slugify($row['ciudad'] ?? '');
 
@@ -1379,6 +1412,8 @@ if ($pdo instanceof PDO) {
         if (!$common) { $common = array_slice($tags, 0, 4); }
         $row['tags_lower'] = $tagsLower;
         $matchScore = dash_match_score($row, $candidateKeywords, $profileData);
+        $docFactor = isset($profileData['doc_score']) ? (float)$profileData['doc_score'] : 1.0;
+        $matchScore = max(0.0, min(100.0, $matchScore * $docFactor));
         $ciudadSlug = dash_slugify($row['ciudad'] ?? '');
         $salarioMinRaw = isset($row['salario_min']) ? (int)$row['salario_min'] : null;
         $salarioMaxRaw = isset($row['salario_max']) ? (int)$row['salario_max'] : null;
@@ -2194,6 +2229,14 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
             <?= $hasSummary ? 'Resumen listo' : 'Completa tu resumen'; ?>
           </li>
         </ul>
+
+        <?php if (!empty($profileData['doc_flags'])): ?>
+          <div class="muted" style="font-size:0.9rem;">
+            <?php foreach ($profileData['doc_flags'] as $flag): ?>
+              <div>• <?=htmlspecialchars($flag, ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
 
 
 

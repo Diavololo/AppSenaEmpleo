@@ -49,6 +49,8 @@ require_once dirname(__DIR__).'/lib/EncodingHelper.php';
 require_once dirname(__DIR__).'/lib/MatchService.php';
 
 require_once dirname(__DIR__).'/lib/match_helpers.php';
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
 // Cliente OpenAI para IA
 
@@ -460,16 +462,26 @@ if (!function_exists('cd_ai_eval_candidate')) {
     $candCiudad = trim((string)($cand['ciudad'] ?? ''));
     $candExp = $cand['anios_experiencia'] ?? null;
     $candExp = is_numeric($candExp) ? (int)$candExp : null;
+    $docScore = isset($cand['doc_score']) ? (float)$cand['doc_score'] : 1.0;
+    $docFlags = isset($cand['doc_flags']) && is_array($cand['doc_flags']) ? $cand['doc_flags'] : [];
+    $eduTot = $cand['doc_edu_total'] ?? null;
+    $eduVer = $cand['doc_edu_verified'] ?? null;
+    $expTot = $cand['doc_exp_total'] ?? null;
+    $expVer = $cand['doc_exp_verified'] ?? null;
+    $docLine = "Evidencia documental: score {$docScore}x";
+    if ($eduTot !== null) { $docLine .= "; educacion {$eduVer}/{$eduTot}"; }
+    if ($expTot !== null) { $docLine .= "; experiencia {$expVer}/{$expTot}"; }
+    if ($docFlags) { $docLine .= "; flags: ".implode(', ', $docFlags); }
 
     $prompt = "Act?a como reclutador t?cnico y eval?a al candidato en espa?ol. "
       ."Match actual: {$scoreText}%, ranking: Top {$rank}. "
       ."Vacante: {$vacTitle}. Requisitos/desc: {$vacReq}. Etiquetas: ".implode(', ', $vacTags).". "
       ."Candidato: Rol deseado {$candRole}; Nivel {$candNivel}; Ciudad {$candCiudad}; "
       ."A?os experiencia ".($candExp !== null ? $candExp : 'desconocido')."; "
-      ."Skills: ".implode(', ', $candSkills)."; Resumen: {$candResumen}. "
+      ."Skills: ".implode(', ', $candSkills)."; Resumen: {$candResumen}. {$docLine}. "
       ."Responde en dos p?rrafos (m?x 120 palabras): "
       ."1) Resumen del ajuste (fortalezas y brechas clave). "
-      ."2) Datos: explica por qu? es apto o no, menciona brechas y datos faltantes si los hay.";
+      ."2) Datos: explica por qu? es apto o no, menciona brechas, datos faltantes o falta de soporte documental si aplica.";
 
     try {
       $raw = $aiClient->chat($prompt, 320);
@@ -781,6 +793,14 @@ $vacNorm = 0.0;
 
 $aiError = null;
 
+$docAnalyzer = null;
+$docEvidenceCache = [];
+try {
+  $docAnalyzer = new DocumentAnalyzer(MatchService::getClient());
+} catch (Throwable $e) {
+  $docAnalyzer = new DocumentAnalyzer(null);
+}
+
 
 
 // Inicializa OpenAI y embedding de la vacante
@@ -1006,13 +1026,33 @@ if ($pdo instanceof PDO && !$error && $vacId) {
     foreach ($candidatos as &$cand) {
       $candEmail = (string)($cand['email'] ?? '');
       if ($candEmail === '') { continue; }
+      $docFactor = 1.0;
+      if ($docAnalyzer) {
+        if (!isset($docEvidenceCache[$candEmail])) {
+          try {
+            $docEvidenceCache[$candEmail] = $docAnalyzer->candidateEvidence($pdo, $candEmail, [
+              'fullName' => trim((($cand['nombres'] ?? '').' '.($cand['apellidos'] ?? ''))),
+            ]);
+          } catch (Throwable $e) {
+            $docEvidenceCache[$candEmail] = ['score' => 1.0];
+            error_log('[candidatos] doc evidence: '.$e->getMessage());
+          }
+        }
+        $docFactor = isset($docEvidenceCache[$candEmail]['score']) ? (float)$docEvidenceCache[$candEmail]['score'] : 1.0;
+        $cand['doc_score'] = $docFactor;
+        $cand['doc_flags'] = $docEvidenceCache[$candEmail]['flags'] ?? [];
+        $cand['doc_edu_verified'] = $docEvidenceCache[$candEmail]['edu_verified'] ?? null;
+        $cand['doc_edu_total'] = $docEvidenceCache[$candEmail]['edu_total'] ?? null;
+        $cand['doc_exp_verified'] = $docEvidenceCache[$candEmail]['exp_verified'] ?? null;
+        $cand['doc_exp_total'] = $docEvidenceCache[$candEmail]['exp_total'] ?? null;
+      }
       try {
         $score = ms_score($pdo, $vac, $candEmail);
       } catch (Throwable $e) {
         error_log('[candidatos] ms_score fallo: '.$e->getMessage());
         $score = $cand['match_score'] ?? 0;
       }
-      $cand['match_score_calc'] = max(0.0, min(100.0, (float)$score));
+      $cand['match_score_calc'] = max(0.0, min(100.0, (float)$score * $docFactor));
     }
     unset($cand);
     usort($candidatos, static fn($a, $b) => ($b['match_score_calc'] ?? 0) <=> ($a['match_score_calc'] ?? 0));
@@ -1430,6 +1470,34 @@ unset($_SESSION['flash_candidatos']);
                   ?>
                   <p class="muted" style="margin-top:.35rem; white-space:pre-line;"><?=cd_e($datosIA); ?></p>
 
+                </div>
+
+                <?php
+                  $docScore = isset($cand['doc_score']) ? (float)$cand['doc_score'] : 1.0;
+                  $docFlags = isset($cand['doc_flags']) && is_array($cand['doc_flags']) ? $cand['doc_flags'] : [];
+                  $eduTot = $cand['doc_edu_total'] ?? null;
+                  $eduVer = $cand['doc_edu_verified'] ?? null;
+                  $expTot = $cand['doc_exp_total'] ?? null;
+                  $expVer = $cand['doc_exp_verified'] ?? null;
+                ?>
+                <div class="card" style="padding:12px; flex:1 1 240px;">
+                  <strong class="muted">Verificación documental</strong>
+                  <ul style="margin:.35rem 0 0; padding-left:16px; color:#111827;">
+                    <li>Score documental: <?=number_format($docScore, 2); ?>x</li>
+                    <?php if ($eduTot !== null): ?>
+                      <li>Educación verificada: <?= (int)$eduVer; ?> / <?= (int)$eduTot; ?></li>
+                    <?php endif; ?>
+                    <?php if ($expTot !== null): ?>
+                      <li>Experiencia verificada: <?= (int)$expVer; ?> / <?= (int)$expTot; ?></li>
+                    <?php endif; ?>
+                    <?php if ($docFlags): ?>
+                      <?php foreach ($docFlags as $f): ?>
+                        <li style="color:#b45309;">⚠ <?=cd_e($f); ?></li>
+                      <?php endforeach; ?>
+                    <?php else: ?>
+                      <li style="color:#15803d;">Documentos consistentes</li>
+                    <?php endif; ?>
+                  </ul>
                 </div>
 
               </section>

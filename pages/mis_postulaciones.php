@@ -14,6 +14,7 @@ require __DIR__.'/db.php';
 require_once dirname(__DIR__).'/lib/EncodingHelper.php';
 require_once dirname(__DIR__).'/lib/MatchService.php';
 require_once dirname(__DIR__).'/lib/match_helpers.php';
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
 if (!function_exists('mp_e')) {
   function mp_e(?string $value): string {
@@ -144,6 +145,21 @@ $postulaciones = [];
 $kpis = ['activas' => 0, 'entrevistas' => 0, 'ofertas' => 0, 'no_seleccion' => 0];
 $upcomingEvents = [];
 $email = $userSession['email'] ?? null;
+$docAnalyzer = null;
+try {
+  $docAnalyzer = new DocumentAnalyzer(MatchService::getClient());
+} catch (Throwable $e) {
+  $docAnalyzer = new DocumentAnalyzer(null);
+}
+$docFactor = 1.0;
+if ($pdo instanceof PDO && $docAnalyzer && $email) {
+  try {
+    $evidence = $docAnalyzer->candidateEvidence($pdo, $email, ['fullName' => $userSession['nombre'] ?? '']);
+    $docFactor = isset($evidence['score']) ? (float)$evidence['score'] : 1.0;
+  } catch (Throwable $e) {
+    error_log('[mis_postulaciones] doc evidence: '.$e->getMessage());
+  }
+}
 $candidateProfile = [];
 $matchClient = MatchService::getClient();
 
@@ -193,6 +209,7 @@ if ($pdo instanceof PDO && $email) {
         'ciudad' => $row['ciudad'] ?? '',
       ];
       $matchPercent = ms_score($pdo, $vacData, $email);
+      $matchPercent = max(0.0, min(100.0, $matchPercent * $docFactor));
 
       $postulaciones[] = [
         'id' => (int)$row['id'],
