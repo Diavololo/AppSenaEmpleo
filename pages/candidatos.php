@@ -672,6 +672,7 @@ $rawEstados = array_map(static fn($v) => strtolower(trim((string)$v)), $rawEstad
 $allowedEstados = ['activo', 'a_revisar', 'entrevista', 'oferta', 'descartado'];
 $filterEstados = array_values(array_intersect($rawEstados, $allowedEstados));
 if (!$filterEstados) { $filterEstados = $allowedEstados; }
+$genEmail = strtolower(trim((string)($_GET['gen_email'] ?? '')));
 
 $error = null;
 
@@ -1374,8 +1375,10 @@ unset($_SESSION['flash_candidatos']);
 
               $calcScore = $cand['match_score_calc'] ?? $cand['match_score'] ?? null;
               $score = $calcScore !== null ? max(0.0, min(100.0, (float)$calcScore)) : 0.0;
+              $candEmailLower = strtolower((string)($cand['email'] ?? ''));
+              $showDetails = ($rank <= 3) || ($genEmail !== '' && $genEmail === $candEmailLower);
 
-              $iaEval = cd_ai_eval_candidate($aiClient, $vac ?? [], $cand, (float)$score, $rank);
+              $iaEval = $showDetails ? cd_ai_eval_candidate($aiClient, $vac ?? [], $cand, (float)$score, $rank) : ['resumen' => '', 'datos' => ''];
 
               $tags = cd_split_tags($cand['habilidades'] ?? '');
 
@@ -1445,6 +1448,7 @@ unset($_SESSION['flash_candidatos']);
 
 
 
+              <?php if ($showDetails): ?>
               <section style="display:flex; flex-wrap:wrap; gap:16px;">
 
                 <?php if ($displayTags): ?>
@@ -1532,6 +1536,27 @@ unset($_SESSION['flash_candidatos']);
                 </div>
 
               </section>
+              <?php else: ?>
+              <section style="display:flex; flex-wrap:wrap; gap:16px;">
+                <div class="card" style="padding:12px; flex:1 1 240px;">
+                  <strong class="muted">Resumen y datos</strong>
+                  <p class="muted" style="margin-top:.35rem;">Genera el resumen y datos de este candidato cuando lo necesites.</p>
+                  <form method="get" style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                    <input type="hidden" name="view" value="candidatos" />
+                    <input type="hidden" name="vacante_id" value="<?=cd_e((string)$vacId); ?>" />
+                    <input type="hidden" name="gen_email" value="<?=cd_e($candEmailLower); ?>" />
+                    <input type="hidden" name="include_descartados" value="<?= $includeDescartados ? '1' : '0'; ?>" />
+                    <?php foreach (['buscar'=>$filterSearch,'score_min'=>$filterScoreMin] as $k=>$v): ?>
+                      <input type="hidden" name="<?=cd_e($k); ?>" value="<?=cd_e((string)$v); ?>" />
+                    <?php endforeach; ?>
+                    <?php foreach ($filterEstados as $est): ?>
+                      <input type="hidden" name="estado[]" value="<?=cd_e($est); ?>" />
+                    <?php endforeach; ?>
+                    <button type="submit" class="btn btn-outline">Generar resumen/datos</button>
+                  </form>
+                </div>
+              </section>
+              <?php endif; ?>
 
 
 
@@ -1699,6 +1724,7 @@ unset($_SESSION['flash_candidatos']);
       font-weight:700;
       box-shadow: 0 6px 14px rgba(58,142,67,0.18);
     }
+    aside.filters .btn.full.btn-important{ color:white !important; text-shadow:none; }
     aside.filters .range-wrap input[type="range"]::-webkit-slider-thumb{
       width:18px; height:18px; border-radius:50%;
       background:#2f8f36; border:2px solid #fff;
