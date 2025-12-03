@@ -310,6 +310,21 @@ $visibleVacantes = array_values(array_filter(
     return true;
   }
 ));
+$coPage = max(1, (int)($_GET['page'] ?? 1));
+$coPerPage = 4;
+$coTotal = count($visibleVacantes);
+$coTotalPages = max(1, (int)ceil($coTotal / $coPerPage));
+if ($coPage > $coTotalPages) { $coPage = $coTotalPages; }
+$coOffset = ($coPage - 1) * $coPerPage;
+$visibleVacantesPage = array_slice($visibleVacantes, $coOffset, $coPerPage);
+$coPageQuery = $_GET;
+$coPageQuery['view'] = 'mis_ofertas_empresa';
+unset($coPageQuery['page']);
+$coBuildPageUrl = function (int $p) use ($coPageQuery): string {
+  $q = $coPageQuery;
+  $q['page'] = $p;
+  return 'index.php?'.http_build_query($q);
+};
 
 $headKpis = [
   ['label' => 'Activas', 'value' => $kpiCounts['activas']],
@@ -394,8 +409,8 @@ unset($_SESSION['flash_mis_ofertas']);
           </div>
         </div>
 
-        <?php if ($visibleVacantes): ?>
-          <?php foreach ($visibleVacantes as $vac): ?>
+        <?php if ($visibleVacantesPage): ?>
+          <?php foreach ($visibleVacantesPage as $vac): ?>
             <?php $row = $vac['raw']; ?>
             <article class="card co-card">
               <div class="co-card-head">
@@ -454,6 +469,35 @@ unset($_SESSION['flash_mis_ofertas']);
               </div>
             </article>
           <?php endforeach; ?>
+
+          <?php if ($coTotalPages > 1): ?>
+            <nav class="pager" role="navigation" aria-label="Paginación" style="margin-top:12px;">
+              <?php if ($coPage > 1): ?>
+                <a class="btn" href="<?=mo_e($coBuildPageUrl($coPage-1)); ?>">Anterior</a>
+              <?php endif; ?>
+              <form method="get" style="display:flex; gap:6px; align-items:center;">
+                <?php foreach ($coPageQuery as $k => $v): ?>
+                  <?php if (is_array($v)): ?>
+                    <?php foreach ($v as $vv): ?>
+                      <input type="hidden" name="<?=mo_e($k); ?>[]" value="<?=mo_e($vv); ?>" />
+                    <?php endforeach; ?>
+                  <?php else: ?>
+                    <input type="hidden" name="<?=mo_e($k); ?>" value="<?=mo_e((string)$v); ?>" />
+                  <?php endif; ?>
+                <?php endforeach; ?>
+                <label class="muted" for="co-pager-page">Página</label>
+                <select id="co-pager-page" name="page">
+                  <?php for ($p=1; $p <= $coTotalPages; $p++): ?>
+                    <option value="<?=$p; ?>" <?=$p === $coPage ? 'selected' : ''; ?>><?=$p; ?> de <?=$coTotalPages; ?></option>
+                  <?php endfor; ?>
+                </select>
+                <button type="submit" class="btn">Ir</button>
+              </form>
+              <?php if ($coPage < $coTotalPages): ?>
+                <a class="btn" href="<?=mo_e($coBuildPageUrl($coPage+1)); ?>">Siguiente</a>
+              <?php endif; ?>
+            </nav>
+          <?php endif; ?>
         <?php else: ?>
           <div class="card co-empty">
             <h3><?= $filtersApplied ? 'No hay vacantes con los filtros aplicados' : 'Aún no tienes vacantes publicadas'; ?></h3>
@@ -595,6 +639,26 @@ unset($_SESSION['flash_mis_ofertas']);
       background:#ffffff;
       border:1px solid #2f8f36;
       box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+    .pager{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .pager .btn{
+      border-radius:12px;
+      border:1px solid #2f8f36;
+      color:#1f9b1f;
+      background:#fff;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+      box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+    .pager select{
+      border-radius:10px;
+      padding:6px 10px;
+      border:1px solid #e6e8ed;
     }
   </style>
 </section>

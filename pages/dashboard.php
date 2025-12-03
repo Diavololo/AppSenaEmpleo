@@ -107,6 +107,23 @@ require_once dirname(__DIR__).'/lib/MatchService.php';
 require_once dirname(__DIR__).'/lib/match_helpers.php';
 require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
+if (!function_exists('dash_ensure_saved_table')) {
+  function dash_ensure_saved_table(PDO $pdo): void
+  {
+    $pdo->exec(
+      'CREATE TABLE IF NOT EXISTS vacantes_guardadas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        candidato_email VARCHAR(255) NOT NULL,
+        vacante_id INT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_cand_vac (candidato_email, vacante_id),
+        INDEX idx_cand (candidato_email),
+        INDEX idx_vac (vacante_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
+  }
+}
+
 $docAnalyzer = null;
 try {
   $docAnalyzer = new DocumentAnalyzer(MatchService::getClient());
@@ -115,6 +132,26 @@ try {
   error_log('[dashboard] doc analyzer fallback: '.$e->getMessage());
 }
 require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
+
+$userEmail = $userSession['email'] ?? '';
+
+// Guardar vacante como favorita (solo para candidatos)
+if ($pdo instanceof PDO && $userEmail !== '' && isset($_GET['save'])) {
+  $saveId = (int)$_GET['save'];
+  if ($saveId > 0) {
+    try {
+      dash_ensure_saved_table($pdo);
+      $ins = $pdo->prepare('INSERT INTO vacantes_guardadas (candidato_email, vacante_id, created_at) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE created_at = VALUES(created_at)');
+      $ins->execute([$userEmail, $saveId]);
+      $_SESSION['flash_dashboard_save'] = 'Vacante guardada para revisar luego.';
+    } catch (Throwable $e) {
+      error_log('[dashboard] guardar vacante: '.$e->getMessage());
+      $_SESSION['flash_dashboard_save'] = 'No se pudo guardar la vacante.';
+    }
+    header('Location: index.php?view=dashboard');
+    exit;
+  }
+}
 
 
 
@@ -1567,11 +1604,10 @@ if ($vacantes) {
   usort(
     $vacantes,
     static function (array $a, array $b): int {
+      $matchCmp = ($b['match'] ?? 0) <=> ($a['match'] ?? 0);
+      if ($matchCmp !== 0) { return $matchCmp; }
       $scoreA = $a['sort_score'] ?? 0;
       $scoreB = $b['sort_score'] ?? 0;
-      if ($scoreA === $scoreB) {
-        return ($b['match'] ?? 0) <=> ($a['match'] ?? 0);
-      }
       return $scoreB <=> $scoreA;
     }
   );
@@ -1588,6 +1624,27 @@ if (!$filtersApplied && $pdo instanceof PDO) {
   }
 }
 $aiError = $aiResult['error'] ?? null;
+
+// Ordena feed por mayor match primero
+if ($vacantesFeed) {
+  usort($vacantesFeed, static fn($a, $b) => (($b['match'] ?? 0) <=> ($a['match'] ?? 0)));
+}
+
+$page = max(1, (int)($_GET['page'] ?? 1));
+$perPage = 4;
+$totalVac = count($vacantesFeed);
+$totalPages = max(1, (int)ceil($totalVac / $perPage));
+if ($page > $totalPages) { $page = $totalPages; }
+$offset = ($page - 1) * $perPage;
+$vacantesPage = array_slice($vacantesFeed, $offset, $perPage);
+$pageQuery = $_GET;
+$pageQuery['view'] = 'dashboard';
+unset($pageQuery['page']);
+$buildPageUrl = function (int $p) use ($pageQuery): string {
+  $q = $pageQuery;
+  $q['page'] = $p;
+  return 'index.php?'.http_build_query($q);
+};
 
 $kpiData = [
 
@@ -1669,21 +1726,19 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
 
       <div class="pref-chips">
 
-        <?php if (!empty($profileData['chips'])): ?>
+      <?php if (!empty($profileData['chips'])): ?>
 
-          <?php foreach ($profileData['chips'] as $chip): ?>
+        <?php foreach ($profileData['chips'] as $chip): ?>
 
-            <span class="chip"><?=htmlspecialchars($chip, ENT_QUOTES, 'UTF-8');?></span>
+          <span class="chip"><?=htmlspecialchars($chip, ENT_QUOTES, 'UTF-8');?></span>
 
-          <?php endforeach; ?>
+        <?php endforeach; ?>
 
         <?php else: ?>
 
           <span class="chip">Completa tu perfil para mejores coincidencias</span>
 
         <?php endif; ?>
-
-        <a class="link-edit" href="#perfil">Actualizar preferencias</a>
 
       </div>
 
@@ -1799,6 +1854,27 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
     .job .row-cta.row-cta-tight .chip{
       padding:0.35rem 0.9rem;
       white-space:nowrap;
+    }
+    .pager{
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-top:12px;
+    }
+    .pager .btn{
+      border-radius:12px;
+      border:1px solid #2f8f36;
+      color:#1f9b1f;
+      background:#fff;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+      box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+    .pager select{
+      border-radius:10px;
+      padding:6px 10px;
+      border:1px solid #e6e8ed;
     }
   </style>
 
@@ -1972,9 +2048,16 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
 
         <p class="muted">Mejora tu match agregando 3–5 <strong>habilidades clave</strong> y actualizando tu CV.</p>
 
-      </div>
+    </div>
 
-    </aside>
+  </aside>
+
+  <?php $flashSave = $_SESSION['flash_dashboard_save'] ?? null; unset($_SESSION['flash_dashboard_save']); ?>
+  <?php if ($flashSave): ?>
+    <div class="card" style="margin-bottom:1rem; border-color:#d6f5d6; background:#f6fff6;">
+      <strong><?=htmlspecialchars($flashSave, ENT_QUOTES, 'UTF-8'); ?></strong>
+    </div>
+  <?php endif; ?>
 
 
 
@@ -2034,9 +2117,9 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
           <p class="muted m-0"><?=htmlspecialchars($aiError, ENT_QUOTES, 'UTF-8'); ?></p>
         </article>
       <?php endif; ?>
-      <?php if ($vacantesFeed): ?>
+      <?php if ($vacantesPage): ?>
 
-        <?php foreach ($vacantesFeed as $vacante): ?>
+        <?php foreach ($vacantesPage as $vacante): ?>
 
           <article class="job card">
 
@@ -2140,6 +2223,35 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
           </article>
 
         <?php endforeach; ?>
+
+        <?php if ($totalPages > 1): ?>
+          <nav class="pager" role="navigation" aria-label="Paginación">
+            <?php if ($page > 1): ?>
+              <a class="btn" href="<?=htmlspecialchars($buildPageUrl($page-1), ENT_QUOTES, 'UTF-8'); ?>">Anterior</a>
+            <?php endif; ?>
+            <form method="get" class="pager-select" onsubmit="return true;" style="display:flex; gap:6px; align-items:center;">
+              <?php foreach ($pageQuery as $k => $v): ?>
+                <?php if (is_array($v)): ?>
+                  <?php foreach ($v as $vv): ?>
+                    <input type="hidden" name="<?=htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>[]" value="<?=htmlspecialchars($vv, ENT_QUOTES, 'UTF-8'); ?>" />
+                  <?php endforeach; ?>
+                <?php else: ?>
+                  <input type="hidden" name="<?=htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" value="<?=htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); ?>" />
+                <?php endif; ?>
+              <?php endforeach; ?>
+              <label class="muted" for="pager-page">Página</label>
+              <select id="pager-page" name="page">
+                <?php for ($p = 1; $p <= $totalPages; $p++): ?>
+                  <option value="<?=$p; ?>" <?=$p === $page ? 'selected' : ''; ?>><?=$p; ?> de <?=$totalPages; ?></option>
+                <?php endfor; ?>
+              </select>
+              <button type="submit" class="btn">Ir</button>
+            </form>
+            <?php if ($page < $totalPages): ?>
+              <a class="btn" href="<?=htmlspecialchars($buildPageUrl($page+1), ENT_QUOTES, 'UTF-8'); ?>">Siguiente</a>
+            <?php endif; ?>
+          </nav>
+        <?php endif; ?>
 
       <?php else: ?>
 

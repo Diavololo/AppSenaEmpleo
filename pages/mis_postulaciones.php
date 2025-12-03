@@ -16,6 +16,23 @@ require_once dirname(__DIR__).'/lib/MatchService.php';
 require_once dirname(__DIR__).'/lib/match_helpers.php';
 require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
+if (!function_exists('mp_ensure_saved_table')) {
+  function mp_ensure_saved_table(PDO $pdo): void
+  {
+    $pdo->exec(
+      'CREATE TABLE IF NOT EXISTS vacantes_guardadas (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        candidato_email VARCHAR(255) NOT NULL,
+        vacante_id INT NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_cand_vac (candidato_email, vacante_id),
+        INDEX idx_cand (candidato_email),
+        INDEX idx_vac (vacante_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
+    );
+  }
+}
+
 if (!function_exists('mp_e')) {
   function mp_e(?string $value): string {
     return htmlspecialchars(fix_mojibake($value ?? ''), ENT_QUOTES, 'UTF-8');
@@ -92,6 +109,7 @@ if (!function_exists('mp_state_meta')) {
       'oferta' => ['label' => 'Oferta recibida', 'pill' => 'state-pill is-success'],
       'contratado' => ['label' => 'Contratado', 'pill' => 'state-pill is-success'],
       'no_seleccionado' => ['label' => 'No seleccionado', 'pill' => 'state-pill is-danger'],
+      'guardada' => ['label' => 'Guardada', 'pill' => 'state-pill is-muted'],
     ];
     $estado = strtolower($estado);
     return $map[$estado] ?? ['label' => ucfirst($estado), 'pill' => 'state-pill'];
@@ -170,6 +188,58 @@ if ($pdo instanceof PDO && $email) {
   if (!empty($candidateProfile['city'])) { $chips[] = 'Ciudad: '.$candidateProfile['city']; }
   if (!empty($candidateProfile['modalidad'])) { $chips[] = 'Modalidad: '.$candidateProfile['modalidad']; }
 
+  // Resumen de perfil (progreso similar al dashboard)
+  $profileSummary = trim((string)($candidateProfile['summary'] ?? ''));
+  $profileSkills = $candidateProfile['skills'] ?? ($candidateProfile['habilidades'] ?? []);
+  if (is_string($profileSkills)) {
+    $profileSkills = array_filter(array_map('trim', preg_split('/[,;]+/', $profileSkills)));
+  }
+  $profileCity = $candidateProfile['city'] ?? ($candidateProfile['ciudad'] ?? '');
+  $profileCityChip = $profileCity ? 'Ciudad: '.$profileCity : null;
+  $hasSummary = $profileSummary !== '';
+  $hasSkills = !empty($profileSkills);
+  $hasCity = trim((string)$profileCity) !== '';
+  $cvUploaded = false;
+  $certCount = 0;
+  $emailVerified = false;
+  try {
+    $cvStmt = $pdo->prepare('SELECT id FROM candidato_documentos WHERE LOWER(email) = LOWER(?) AND tipo = "cv" ORDER BY uploaded_at DESC LIMIT 1');
+    $cvStmt->execute([$email]);
+    $cvUploaded = (bool)$cvStmt->fetchColumn();
+  } catch (Throwable $e) {
+    error_log('[mis_postulaciones] cv status: '.$e->getMessage());
+  }
+  try {
+    $certStmt1 = $pdo->prepare('SELECT COUNT(*) FROM candidato_experiencia_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE LOWER(d.email) = LOWER(?)');
+    $certStmt2 = $pdo->prepare('SELECT COUNT(*) FROM candidato_educacion_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE LOWER(d.email) = LOWER(?)');
+    if ($certStmt1 && $certStmt2) {
+      $certStmt1->execute([$email]);
+      $certStmt2->execute([$email]);
+      $certCount = (int)$certStmt1->fetchColumn() + (int)$certStmt2->fetchColumn();
+    }
+  } catch (Throwable $e) {
+    error_log('[mis_postulaciones] cert status: '.$e->getMessage());
+  }
+  try {
+    $verifyStmt = $pdo->prepare('SELECT email_verificado_at FROM candidatos WHERE LOWER(email)=LOWER(?) LIMIT 1');
+    $verifyStmt->execute([$email]);
+    $emailVerified = (bool)$verifyStmt->fetchColumn();
+  } catch (Throwable $e) {
+    error_log('[mis_postulaciones] email verify: '.$e->getMessage());
+  }
+  $profileChecks = [
+    $cvUploaded,
+    $emailVerified,
+    $certCount >= 2,
+    $hasSkills,
+    $hasSummary,
+    $hasCity,
+  ];
+  $profileProgress = $profileChecks
+    ? (int)round(array_sum(array_map(static fn($v) => $v ? 1 : 0, $profileChecks)) / count($profileChecks) * 100)
+    : 0;
+  $profileProgressText = $profileProgress.'% completo';
+
   try {
     $stmt = $pdo->prepare(
       'SELECT p.id, p.estado, p.match_score, p.aplicada_at,
@@ -226,21 +296,84 @@ if ($pdo instanceof PDO && $email) {
         'etiquetas' => $tags,
         'steps' => mp_build_steps($estado),
         'match_percent' => $matchPercent,
+      'salario' => mp_format_salary(
+        isset($row['salario_min']) ? (int)$row['salario_min'] : null,
+        isset($row['salario_max']) ? (int)$row['salario_max'] : null,
+        (string)($row['moneda'] ?? 'COP')
+      ),
+      'can_delete' => ($estado === 'no_seleccionado'),
+    ];
+  }
+} catch (Throwable $error) {
+  error_log('[mis_postulaciones] listado: '.$error->getMessage());
+}
+
+// Vacantes guardadas (no postuladas) - prioridad debajo de las postuladas
+if ($pdo instanceof PDO && $email) {
+  try {
+    mp_ensure_saved_table($pdo);
+    $savedStmt = $pdo->prepare(
+      'SELECT g.vacante_id, g.created_at,
+              v.titulo, v.descripcion, v.requisitos, v.etiquetas,
+              v.salario_min, v.salario_max, v.moneda, v.ciudad,
+              e.razon_social AS empresa_nombre,
+              a.nombre AS area_nombre, n.nombre AS nivel_nombre, m.nombre AS modalidad_nombre
+       FROM vacantes_guardadas g
+       INNER JOIN vacantes v ON v.id = g.vacante_id
+       LEFT JOIN empresas e ON e.id = v.empresa_id
+       LEFT JOIN areas a ON a.id = v.area_id
+       LEFT JOIN niveles n ON n.id = v.nivel_id
+       LEFT JOIN modalidades m ON m.id = v.modalidad_id
+       WHERE g.candidato_email = ?
+         AND NOT EXISTS (SELECT 1 FROM postulaciones p WHERE p.vacante_id = g.vacante_id AND p.candidato_email = ?)'
+    );
+    $savedStmt->execute([$email, $email]);
+    foreach ($savedStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $vacData = [
+        'id' => (int)$row['vacante_id'],
+        'titulo' => $row['titulo'] ?? '',
+        'descripcion' => $row['descripcion'] ?? '',
+        'requisitos' => $row['requisitos'] ?? '',
+        'etiquetas' => $row['etiquetas'] ?? '',
+        'area_nombre' => $row['area_nombre'] ?? '',
+        'nivel_nombre' => $row['nivel_nombre'] ?? '',
+        'modalidad_nombre' => $row['modalidad_nombre'] ?? '',
+        'ciudad' => $row['ciudad'] ?? '',
+      ];
+      $matchPercent = ms_score($pdo, $vacData, $email);
+      $matchPercent = max(0.0, min(100.0, $matchPercent * $docFactor));
+      $stateMeta = mp_state_meta('guardada');
+      $postulaciones[] = [
+        'id' => 0,
+        'vacante_id' => (int)$row['vacante_id'],
+        'titulo' => $row['titulo'] ?? 'Oferta sin título',
+        'empresa' => $row['empresa_nombre'] ?? 'Empresa confidencial',
+        'ciudad' => $row['ciudad'] ?? null,
+        'estado' => 'guardada',
+        'state_meta' => $stateMeta,
+        'estado_label' => $stateMeta['label'],
+        'aplicada_hace' => mp_human_diff($row['created_at'] ?? null),
+        'aplicada_at_raw' => $row['created_at'] ?? null,
+        'descripcion' => mp_truncate($row['descripcion'] ?? ''),
+        'etiquetas' => mp_extract_tags($row['etiquetas'] ?? ''),
+        'steps' => mp_build_steps('recibida'),
+        'match_percent' => $matchPercent,
         'salario' => mp_format_salary(
           isset($row['salario_min']) ? (int)$row['salario_min'] : null,
           isset($row['salario_max']) ? (int)$row['salario_max'] : null,
           (string)($row['moneda'] ?? 'COP')
         ),
-        'can_delete' => ($estado === 'no_seleccionado'),
+        'can_delete' => false,
       ];
     }
-  } catch (Throwable $error) {
-    error_log('[mis_postulaciones] listado: '.$error->getMessage());
+  } catch (Throwable $e) {
+    error_log('[mis_postulaciones] guardadas: '.$e->getMessage());
   }
+}
 
-  // Próximos eventos (entrevistas programadas para el candidato)
-  try {
-    $evStmt = $pdo->prepare(
+// Próximos eventos (entrevistas programadas para el candidato)
+try {
+  $evStmt = $pdo->prepare(
       'SELECT p.updated_at, e.razon_social AS empresa_nombre, v.titulo, v.ciudad
        FROM postulaciones p
        INNER JOIN vacantes v ON v.id = p.vacante_id
@@ -262,6 +395,7 @@ $stateFilters = [
   'entrevista' => 'Entrevista',
   'oferta' => 'Oferta',
   'no_seleccionado' => 'No seleccionado',
+  'guardada' => 'Guardada',
 ];
 $filterSearch = trim((string)($_GET['buscar'] ?? ''));
 $filterStates = $_GET['estado'] ?? [];
@@ -289,6 +423,11 @@ $visiblePostulaciones = array_values(array_filter(
 ));
 
 usort($visiblePostulaciones, static function ($a, $b) use ($filterSort) {
+  $prioA = $a['estado'] === 'guardada' ? 1 : 0;
+  $prioB = $b['estado'] === 'guardada' ? 1 : 0;
+  if ($prioA !== $prioB) {
+    return $prioA <=> $prioB; // guardadas después
+  }
   return $filterSort === 'antiguas'
     ? strcmp((string)$a['aplicada_at_raw'], (string)$b['aplicada_at_raw'])
     : strcmp((string)$b['aplicada_at_raw'], (string)$a['aplicada_at_raw']);
@@ -314,7 +453,6 @@ $baseHref = 'index.php';
           <span class="chip">Actualiza tus preferencias para mejores coincidencias</span>
         <?php endif; ?>
       </div>
-      <a class="link-edit" href="?view=editar_perfil">Editar preferencias</a>
     </div>
   </div>
   <div class="mp-kpis">
@@ -482,17 +620,25 @@ $baseHref = 'index.php';
     <div class="card mp-side-card">
       <h3>Resumen del perfil</h3>
       <div class="mp-progress">
-        <div class="mp-progress-bar"><span style="width:80%"></span></div>
-        <p class="muted">Perfil 80% completo</p>
+        <div class="mp-progress-bar"><span style="width:<?=$profileProgress ?? 0; ?>%"></span></div>
+        <p class="muted">Perfil <?=mp_e($profileProgressText ?? ''); ?></p>
       </div>
       <div class="mp-side-tags">
-        <?php if ($chips): ?>
-          <?php foreach (array_slice($chips, 0, 4) as $chip): ?>
-            <span class="chip chip-small"><?=mp_e($chip); ?></span>
-          <?php endforeach; ?>
-        <?php else: ?>
-          <span class="chip chip-small">Ciudad: Bogotá</span>
-        <?php endif; ?>
+        <?php
+          $sideChips = [];
+          if ($profileCityChip) { $sideChips[] = $profileCityChip; }
+          if ($chips) {
+            foreach ($chips as $chip) {
+              if ($profileCityChip && stripos($chip, (string)$profileCityChip) !== false) { continue; }
+              $sideChips[] = $chip;
+              if (count($sideChips) >= 4) { break; }
+            }
+          }
+          $sideChips = array_values(array_unique($sideChips));
+        ?>
+        <?php foreach ($sideChips as $chip): ?>
+          <span class="chip chip-small"><?=mp_e($chip); ?></span>
+        <?php endforeach; ?>
       </div>
       <a class="btn btn-primary" href="?view=editar_perfil">Actualizar CV</a>
     </div>
@@ -535,5 +681,26 @@ $baseHref = 'index.php';
     box-shadow:0 4px 10px rgba(47,143,54,0.12);
   }
   .mp-filter-tip{ color:#445; }
+
+  /* Organización de card de oferta */
+  .mp-meta-grid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px,1fr));
+    gap:12px;
+    margin:10px 0 8px 0;
+    align-items:start;
+  }
+  .mp-meta-grid .mp-meta-label{ display:block; text-transform:uppercase; font-size:.8rem; color:#6b7280; letter-spacing:.02em; }
+  .mp-meta-grid .mp-meta-value{ font-weight:700; color:#1f2937; }
+  .mp-stepper{
+    display:grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap:8px;
+    margin-top:8px;
+    align-items:center;
+    text-align:center;
+  }
+  .mp-step{ display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .mp-step-dot{ margin:0 auto; }
 </style>
 </main>
