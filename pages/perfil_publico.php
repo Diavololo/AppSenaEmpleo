@@ -50,6 +50,7 @@ $perfil = [
     'linkedin' => '#',
   ],
   'foto'         => null,
+  'cv'           => null,
 ];
 
 $splitList = static function (?string $value): array {
@@ -137,37 +138,88 @@ if ($pdo instanceof PDO) {
     }
 
     // Experiencia
+    $expCertMap = [];
+    $expCertStmt = $pdo->prepare(
+      "SELECT c.experiencia_id, d.nombre_archivo, d.ruta
+         FROM {$schemaPrefix}candidato_experiencia_certificados c
+         JOIN {$schemaPrefix}candidato_documentos d ON d.id = c.documento_id
+        WHERE LOWER(d.email) = LOWER(?)"
+    );
+    $expCertStmt->execute([$targetEmail]);
+    foreach ($expCertStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $expCertMap[(int)$row['experiencia_id']] = [
+        'nombre' => (string)$row['nombre_archivo'],
+        'ruta'   => (string)$row['ruta'],
+      ];
+    }
+
     $expStmt = $pdo->prepare(
-      "SELECT cargo, empresa, periodo, anios_experiencia AS anos_experiencia, descripcion
+      "SELECT id, cargo, empresa, periodo, anios_experiencia AS anos_experiencia, descripcion
          FROM {$schemaPrefix}candidato_experiencias
         WHERE LOWER(email) = LOWER(?)
         ORDER BY orden ASC, created_at ASC"
     );
     $expStmt->execute([$targetEmail]);
     foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
+      $expId = (int)$exp['id'];
       $perfil['experiencias'][] = [
         'cargo'            => $exp['cargo'] ?: 'Experiencia',
         'empresa'          => $exp['empresa'] ?: '',
         'periodo'          => $exp['periodo'] ?: '',
         'anos_experiencia' => $exp['anos_experiencia'],
         'desc'             => $exp['descripcion'] ?: '',
+        'soporte'          => $expCertMap[$expId] ?? null,
       ];
     }
 
     // Educacion
+    $eduCertMap = [];
+    $eduCertStmt = $pdo->prepare(
+      "SELECT c.educacion_id, d.nombre_archivo, d.ruta
+         FROM {$schemaPrefix}candidato_educacion_certificados c
+         JOIN {$schemaPrefix}candidato_documentos d ON d.id = c.documento_id
+        WHERE LOWER(d.email) = LOWER(?)"
+    );
+    $eduCertStmt->execute([$targetEmail]);
+    foreach ($eduCertStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+      $eduCertMap[(int)$row['educacion_id']] = [
+        'nombre' => (string)$row['nombre_archivo'],
+        'ruta'   => (string)$row['ruta'],
+      ];
+    }
+
     $eduStmt = $pdo->prepare(
-      "SELECT titulo, institucion, periodo, descripcion
+      "SELECT id, titulo, institucion, periodo, descripcion
          FROM {$schemaPrefix}candidato_educacion
         WHERE LOWER(email) = LOWER(?)
         ORDER BY orden ASC, created_at ASC"
     );
     $eduStmt->execute([$targetEmail]);
     foreach ($eduStmt->fetchAll(PDO::FETCH_ASSOC) as $edu) {
+      $eduId = (int)$edu['id'];
       $perfil['educacion'][] = [
         'titulo'      => $edu['titulo'] ?: 'Estudio',
         'institucion' => $edu['institucion'] ?: '',
         'periodo'     => $edu['periodo'] ?: '',
         'desc'        => $edu['descripcion'] ?: '',
+        'soporte'     => $eduCertMap[$eduId] ?? null,
+      ];
+    }
+
+    // CV mas reciente
+    $cvStmt = $pdo->prepare(
+      "SELECT nombre_archivo, ruta, mime
+         FROM {$schemaPrefix}candidato_documentos
+        WHERE LOWER(email) = LOWER(?) AND tipo = 'cv'
+        ORDER BY uploaded_at DESC
+        LIMIT 1"
+    );
+    $cvStmt->execute([$targetEmail]);
+    if ($cvRow = $cvStmt->fetch(PDO::FETCH_ASSOC)) {
+      $perfil['cv'] = [
+        'nombre' => (string)$cvRow['nombre_archivo'],
+        'ruta'   => (string)$cvRow['ruta'],
+        'mime'   => (string)$cvRow['mime'],
       ];
     }
   } catch (Throwable $profileError) {
@@ -212,7 +264,9 @@ $perfil['educacion'] = array_values($perfil['educacion']);
         <?php if (!$viewerIsEmpresa): ?>
           <a class="btn btn-secondary" href="index.php?view=editar_perfil">Editar</a>
         <?php endif; ?>
-        <button class="btn btn-outline" type="button">Descargar PDF</button>
+        <?php if (!empty($perfil['cv']['ruta'])): ?>
+          <a class="btn btn-outline" href="<?=pp_e($perfil['cv']['ruta']); ?>" target="_blank" rel="noopener">Ver hoja de vida</a>
+        <?php endif; ?>
         <button class="btn btn-primary" type="button">Contactar</button>
       </div>
     </aside>
@@ -239,6 +293,9 @@ $perfil['educacion'] = array_values($perfil['educacion']);
                 ]); ?>
                 <?php if ($labels): ?><p class="muted m-0"><?=pp_e(implode(' - ', $labels)); ?></p><?php endif; ?>
                 <?php if (!empty($exp['desc'])): ?><p class="m-0"><?=pp_e($exp['desc']); ?></p><?php endif; ?>
+                <?php if (!empty($exp['soporte']['ruta'])): ?>
+                  <p class="m-0"><a class="link" href="<?=pp_e($exp['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
+                <?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>
@@ -257,6 +314,9 @@ $perfil['educacion'] = array_values($perfil['educacion']);
                 <?php $eduLabels = array_filter([$edu['institucion'] ?? '', $edu['periodo'] ?? '']); ?>
                 <?php if ($eduLabels): ?><p class="m-0 muted"><?=pp_e(implode(' - ', $eduLabels)); ?></p><?php endif; ?>
                 <?php if (!empty($edu['desc'])): ?><p class="m-0"><?=pp_e($edu['desc']); ?></p><?php endif; ?>
+                <?php if (!empty($edu['soporte']['ruta'])): ?>
+                  <p class="m-0"><a class="link" href="<?=pp_e($edu['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
+                <?php endif; ?>
               </div>
             <?php endforeach; ?>
           </div>
