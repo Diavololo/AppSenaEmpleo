@@ -60,6 +60,41 @@ $monedas = ['COP' => 'COP', 'USD' => 'USD', 'EUR' => 'EUR'];
 $catalogs = ['areas'=>[], 'niveles'=>[], 'modalidades'=>[], 'contratos'=>[]];
 $catalogIndex = ['areas'=>[], 'niveles'=>[], 'modalidades'=>[], 'contratos'=>[]];
 
+if (!function_exists('eo_seed_modalidades_if_missing')) {
+  /**
+   * Inserta modalidades basicas si faltan y devuelve el catalogo actualizado.
+   * @param array<int,array<string,mixed>> $catalog
+   * @return array<int,array<string,mixed>>
+   */
+  function eo_seed_modalidades_if_missing(PDO $pdo, array $catalog): array
+  {
+    $required = ['Presencial', 'Hibrido', 'Remoto'];
+    $normalize = static function (?string $value): string {
+      $label = eo_fix_label($value);
+      $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $label);
+      $ascii = $ascii !== false ? $ascii : $label;
+      return strtolower(trim((string)$ascii));
+    };
+    $existing = [];
+    foreach ($catalog as $row) { $existing[] = $normalize($row['nombre'] ?? ''); }
+    $missing = [];
+    foreach ($required as $name) {
+      if (!in_array($normalize($name), $existing, true)) { $missing[] = $name; }
+    }
+    if ($missing) {
+      try {
+        $stmt = $pdo->prepare('INSERT IGNORE INTO modalidades (nombre) VALUES (?)');
+        foreach ($missing as $name) { $stmt->execute([$name]); }
+        $refresh = $pdo->query('SELECT id, nombre FROM modalidades ORDER BY nombre');
+        if ($refresh) { $catalog = $refresh->fetchAll(PDO::FETCH_ASSOC) ?: $catalog; }
+      } catch (Throwable $e) {
+        error_log('[editar_oferta] seed modalidades: '.$e->getMessage());
+      }
+    }
+    return $catalog;
+  }
+}
+
 // Catálogos
 if ($pdo instanceof PDO) {
   $tables = ['areas'=>'areas','niveles'=>'niveles','modalidades'=>'modalidades','contratos'=>'contratos'];
@@ -70,6 +105,9 @@ if ($pdo instanceof PDO) {
     } catch (Throwable $e) {
       error_log('[editar_oferta] Catalogo '.$table.': '.$e->getMessage());
       $catalogs[$key] = [];
+    }
+    if ($key === 'modalidades') {
+      $catalogs[$key] = eo_seed_modalidades_if_missing($pdo, $catalogs[$key]);
     }
     foreach ($catalogs[$key] as $row) {
       if (isset($row['id'])) { $catalogIndex[$key][(int)$row['id']] = eo_fix_label($row['nombre'] ?? ''); }

@@ -30,6 +30,53 @@ if (!function_exists('dash_load_env_file')) {
 $envLaravel = dirname(__DIR__).'/laravel-app/.env';
 dash_load_env_file($envLaravel);
 
+if (!function_exists('dash_seed_modalidades')) {
+  /**
+   * Se asegura de que existan las modalidades b�sicas (Presencial, Hibrido, Remoto) en BD.
+   * @param array<int,array{id?:int,nombre?:string}> $options
+   * @return array<int,array<string,mixed>>
+   */
+  function dash_seed_modalidades(PDO $pdo, array $options): array
+  {
+    $required = ['Presencial', 'Hibrido', 'Remoto'];
+    $normalize = static function ($value): string {
+      $label = trim((string)$value);
+      $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $label);
+      $ascii = $ascii !== false ? $ascii : $label;
+      return strtolower($ascii);
+    };
+
+    $current = [];
+    foreach ($options as $row) {
+      $current[] = $normalize($row['nombre'] ?? '');
+    }
+
+    $missing = [];
+    foreach ($required as $name) {
+      if (!in_array($normalize($name), $current, true)) {
+        $missing[] = $name;
+      }
+    }
+
+    if ($missing) {
+      try {
+        $stmt = $pdo->prepare('INSERT IGNORE INTO modalidades (nombre) VALUES (?)');
+        foreach ($missing as $name) {
+          $stmt->execute([$name]);
+        }
+        $refetch = $pdo->query('SELECT id, nombre FROM modalidades ORDER BY nombre ASC');
+        if ($refetch) {
+          $options = $refetch->fetchAll(PDO::FETCH_ASSOC) ?: $options;
+        }
+      } catch (Throwable $e) {
+        error_log('[dashboard] modalidades seed: '.$e->getMessage());
+      }
+    }
+
+    return $options;
+  }
+}
+
 // Mapea variables de Laravel a las usadas por la app plana (DB y OpenAI)
 if (!getenv('DB_NAME') && getenv('DB_DATABASE')) { putenv('DB_NAME='.getenv('DB_DATABASE')); $_ENV['DB_NAME'] = getenv('DB_DATABASE'); }
 if (!getenv('DB_USER') && getenv('DB_USERNAME')) { putenv('DB_USER='.getenv('DB_USERNAME')); $_ENV['DB_USER'] = getenv('DB_USERNAME'); }
@@ -125,6 +172,12 @@ $profileData = [
 
   'summary' => null,
 
+  'email_verified' => false,
+
+  'cv_uploaded' => false,
+
+  'certifications' => 0,
+
 ];
 
 
@@ -151,7 +204,7 @@ if ($pdo instanceof PDO) {
 
   $stmt = $pdo->prepare(
 
-    'SELECT c.nombres, c.apellidos, c.ciudad,
+    'SELECT c.nombres, c.apellidos, c.ciudad, c.email_verificado_at,
 
             cd.perfil AS resumen, cd.areas_interes, cd.foto_ruta,
 
@@ -218,6 +271,8 @@ if ($pdo instanceof PDO) {
     $profileData['disponibilidad'] = $row['disponibilidad_nombre'] ?? null;
 
     $profileData['summary'] = $row['resumen'] ?? null;
+
+    $profileData['email_verified'] = !empty($row['email_verificado_at']);
 
     if (!empty($row['foto_ruta'])) {
 
@@ -926,85 +981,45 @@ $candidateKeywords = array_values(array_unique($candidateKeywords));
 
 
 
-$modalidadOptions = [
-
-  'remoto' => 'Remoto',
-
-  'hibrido' => 'Híbrido',
-
-  'presencial' => 'Presencial',
-
-];
-
-$contratoOptions = [
-
-  'tiempo-completo' => 'Tiempo completo',
-
-  'medio-tiempo' => 'Medio tiempo',
-
-  'practicas' => 'Prácticas',
-
-  'por-proyecto' => 'Por proyecto',
-
-];
-
-$experienceOptions = [
-
-  '0' => '0 (primera experiencia)',
-
-  '1-2' => '1 a 2 años',
-
-  '3-5' => '3 a 5 años',
-
-  '6-9' => '6 a 9 años',
-
-  '10+' => '10+ años',
-
-];
-
-$experienceBuckets = [
-
-  '0' => [0, 0],
-
-  '1-2' => [1, 2],
-
-  '3-5' => [3, 5],
-
-  '6-9' => [6, 9],
-
-  '10+' => [10, null],
-
-];
-
-
+$modalidadOptions = [];
+$contratoOptions = [];
+$nivelOptions = [];
+$areaOptions = [];
+$currencyOptions = [];
+if ($pdo instanceof PDO) {
+  try {
+    $modalidadOptions = $pdo->query('SELECT id, nombre FROM modalidades ORDER BY nombre ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $contratoOptions = $pdo->query('SELECT id, nombre FROM contratos ORDER BY nombre ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $nivelOptions = $pdo->query('SELECT id, nombre FROM niveles ORDER BY nombre ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $areaOptions = $pdo->query('SELECT id, nombre FROM areas ORDER BY nombre ASC')->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    $modalidadOptions = dash_seed_modalidades($pdo, $modalidadOptions);
+    $currencyOptions = $pdo->query('SELECT DISTINCT UPPER(moneda) AS moneda FROM vacantes WHERE moneda IS NOT NULL AND moneda <> "" ORDER BY moneda ASC')->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+    // Asegura COP y USD visibles siempre, sin duplicar
+    $currencyOptions = array_values(array_unique(array_filter(array_merge(['COP'], $currencyOptions, ['USD']))));
+  } catch (Throwable $e) {
+    error_log('[dashboard] catalogos: '.$e->getMessage());
+  }
+}
 
 $filterSearch = trim((string)($_GET['buscar'] ?? ''));
 
 $filterModalidad = $_GET['modalidad'] ?? [];
-
 if (!is_array($filterModalidad)) { $filterModalidad = [$filterModalidad]; }
-
-$filterModalidad = array_values(array_filter(array_map('dash_slugify', $filterModalidad)));
-
-
+$filterModalidad = array_values(array_filter(array_map(static fn($v) => (int)$v, $filterModalidad), static fn($v) => $v > 0));
 
 $filterContrato = $_GET['contrato'] ?? [];
-
 if (!is_array($filterContrato)) { $filterContrato = [$filterContrato]; }
+$filterContrato = array_values(array_filter(array_map(static fn($v) => (int)$v, $filterContrato), static fn($v) => $v > 0));
 
-$filterContrato = array_values(array_filter(array_map('dash_slugify', $filterContrato)));
+$filterNivel = $_GET['nivel'] ?? [];
+if (!is_array($filterNivel)) { $filterNivel = [$filterNivel]; }
+$filterNivel = array_values(array_filter(array_map(static fn($v) => (int)$v, $filterNivel), static fn($v) => $v > 0));
 
+$filterArea = $_GET['area'] ?? [];
+if (!is_array($filterArea)) { $filterArea = [$filterArea]; }
+$filterArea = array_values(array_filter(array_map(static fn($v) => (int)$v, $filterArea), static fn($v) => $v > 0));
 
-
-$filterExperiencia = (string)($_GET['experiencia'] ?? '');
-
-if (!array_key_exists($filterExperiencia, $experienceOptions)) {
-
-  $filterExperiencia = '';
-
-}
-
-
+$filterCurrency = strtoupper(trim((string)($_GET['moneda'] ?? '')));
 
 $filterCiudad = trim((string)($_GET['ciudad'] ?? ''));
 
@@ -1023,19 +1038,14 @@ $filterSalarioDisplay = $filterSalario !== null ? number_format($filterSalario, 
 $searchNeedle = $filterSearch !== '' ? dash_lower($filterSearch) : '';
 
 $filtersApplied = (
-
   $filterSearch !== ''
-
   || $filterModalidad
-
   || $filterContrato
-
-  || $filterExperiencia !== ''
-
+  || $filterNivel
+  || $filterArea
+  || $filterCurrency !== ''
   || $filterCiudadSlug !== ''
-
   || $filterSalario !== null
-
 );
 
 
@@ -1047,6 +1057,7 @@ $entrevistaCount = 0;
 
 
 $vacantes = [];
+$vacantesPool = [];
 
 $nuevasVacantes = 0;
 
@@ -1098,17 +1109,21 @@ if ($pdo instanceof PDO) {
          v.requisitos,
          v.etiquetas,
          v.ciudad,
-         v.salario_min,
-         v.salario_max,
-         v.moneda,
-         v.publicada_at,
-         v.created_at,
-         v.estado,
-         e.id AS empresa_id,
-         e.razon_social AS empresa_nombre,
-         m.nombre AS modalidad_nombre,
-         n.nombre AS nivel_nombre,
-         c.nombre AS contrato_nombre,
+        v.salario_min,
+        v.salario_max,
+        v.moneda,
+        v.publicada_at,
+        v.created_at,
+        v.estado,
+        v.modalidad_id,
+        v.tipo_contrato_id,
+        v.nivel_id,
+        v.area_id,
+        e.id AS empresa_id,
+        e.razon_social AS empresa_nombre,
+        m.nombre AS modalidad_nombre,
+        n.nombre AS nivel_nombre,
+        c.nombre AS contrato_nombre,
          a.nombre AS area_nombre
        FROM vacantes v
        LEFT JOIN empresas e ON e.id = v.empresa_id
@@ -1121,48 +1136,33 @@ if ($pdo instanceof PDO) {
     $whereParts = [];
     $params = [];
 
-    // Buscar IDs canónicos de modalidad/contrato para filtrar por v.modalidad_id / v.tipo_contrato_id
-    $modalidadIds = [];
     if ($filterModalidad) {
-      $modNames = [];
-      foreach ($filterModalidad as $slug) {
-        if ($slug === 'remoto') { $modNames[] = 'remoto'; }
-        elseif ($slug === 'hibrido') { $modNames[] = 'híbrido'; $modNames[] = 'hibrido'; }
-        elseif ($slug === 'presencial') { $modNames[] = 'presencial'; }
-      }
-      if ($modNames) {
-        $place = implode(',', array_fill(0, count($modNames), '?'));
-        $q = $pdo->prepare('SELECT id FROM modalidades WHERE LOWER(TRIM(nombre)) IN ('.$place.')');
-        $q->execute($modNames);
-        $modalidadIds = array_values(array_filter(array_map(static fn($row) => (int)($row['id'] ?? 0), $q->fetchAll(PDO::FETCH_ASSOC) ?: []), static fn($id) => $id > 0));
-      }
-      if ($modalidadIds) {
-        $place = implode(',', array_fill(0, count($modalidadIds), '?'));
-        $whereParts[] = ' AND v.modalidad_id IN ('.$place.')';
-        foreach ($modalidadIds as $id) { $params[] = $id; }
-      }
+      $place = implode(',', array_fill(0, count($filterModalidad), '?'));
+      $whereParts[] = ' AND v.modalidad_id IN ('.$place.')';
+      foreach ($filterModalidad as $id) { $params[] = $id; }
     }
 
-    $contratoIds = [];
     if ($filterContrato) {
-      $conNames = [];
-      foreach ($filterContrato as $slug) {
-        if ($slug === 'tiempo-completo') { $conNames[] = 'tiempo completo'; }
-        elseif ($slug === 'medio-tiempo') { $conNames[] = 'medio tiempo'; }
-        elseif ($slug === 'practicas') { $conNames[] = 'prácticas'; $conNames[] = 'practicas'; }
-        elseif ($slug === 'por-proyecto') { $conNames[] = 'por proyecto'; }
-      }
-      if ($conNames) {
-        $place = implode(',', array_fill(0, count($conNames), '?'));
-        $q = $pdo->prepare('SELECT id FROM contratos WHERE LOWER(TRIM(nombre)) IN ('.$place.')');
-        $q->execute($conNames);
-        $contratoIds = array_values(array_filter(array_map(static fn($row) => (int)($row['id'] ?? 0), $q->fetchAll(PDO::FETCH_ASSOC) ?: []), static fn($id) => $id > 0));
-      }
-      if ($contratoIds) {
-        $place = implode(',', array_fill(0, count($contratoIds), '?'));
-        $whereParts[] = ' AND v.tipo_contrato_id IN ('.$place.')';
-        foreach ($contratoIds as $id) { $params[] = $id; }
-      }
+      $place = implode(',', array_fill(0, count($filterContrato), '?'));
+      $whereParts[] = ' AND v.tipo_contrato_id IN ('.$place.')';
+      foreach ($filterContrato as $id) { $params[] = $id; }
+    }
+
+    if ($filterNivel) {
+      $place = implode(',', array_fill(0, count($filterNivel), '?'));
+      $whereParts[] = ' AND v.nivel_id IN ('.$place.')';
+      foreach ($filterNivel as $id) { $params[] = $id; }
+    }
+
+    if ($filterArea) {
+      $place = implode(',', array_fill(0, count($filterArea), '?'));
+      $whereParts[] = ' AND v.area_id IN ('.$place.')';
+      foreach ($filterArea as $id) { $params[] = $id; }
+    }
+
+    if ($filterCurrency !== '') {
+      $whereParts[] = ' AND UPPER(v.moneda) = ?';
+      $params[] = $filterCurrency;
     }
 
     if ($filterCiudadSlug !== '') {
@@ -1177,7 +1177,7 @@ if ($pdo instanceof PDO) {
     }
 
     // Aplica orden y límite (mayor cobertura cuando hay filtros)
-    $limit = ($filterModalidad || $filterContrato || $filterCiudadSlug !== '' || $filterSalario !== null || $filterExperiencia !== '') ? 200 : 20;
+    $limit = ($filterModalidad || $filterContrato || $filterNivel || $filterArea || $filterCurrency !== '' || $filterCiudadSlug !== '' || $filterSalario !== null) ? 200 : 20;
     $sql = $baseSql.implode('', $whereParts).' ORDER BY COALESCE(v.publicada_at, v.created_at) DESC LIMIT '.$limit;
 
     $vacStmt = $pdo->prepare($sql);
@@ -1256,10 +1256,6 @@ if ($pdo instanceof PDO) {
 
         $matchScore = dash_match_score($row, $candidateKeywords, $profileData);
 
-        $modalidadSlug = dash_slugify($row['modalidad_nombre'] ?? '');
-
-        $contratoSlug = dash_slugify($row['contrato_nombre'] ?? '');
-
         $ciudadSlug = dash_slugify($row['ciudad'] ?? '');
 
         $salarioMinRaw = isset($row['salario_min']) ? (int)$row['salario_min'] : null;
@@ -1284,15 +1280,15 @@ if ($pdo instanceof PDO) {
 
         $searchBlob = $searchParts ? dash_lower(implode(' ', $searchParts)) : '';
 
-        $experienceYears = dash_infer_experience_years(
-
-          $row['nivel_nombre'] ?? '',
-
-          ($row['descripcion'] ?? '').' '.($row['requisitos'] ?? '')
-
-        );
-
-
+        $filterMatchScore = 0;
+        if ($filterModalidad && in_array((int)($row['modalidad_id'] ?? 0), $filterModalidad, true)) { $filterMatchScore += 12; }
+        if ($filterContrato && in_array((int)($row['tipo_contrato_id'] ?? 0), $filterContrato, true)) { $filterMatchScore += 10; }
+        if ($filterNivel && in_array((int)($row['nivel_id'] ?? 0), $filterNivel, true)) { $filterMatchScore += 10; }
+        if ($filterArea && in_array((int)($row['area_id'] ?? 0), $filterArea, true)) { $filterMatchScore += 10; }
+        if ($filterCurrency !== '' && strtoupper((string)($row['moneda'] ?? '')) === $filterCurrency) { $filterMatchScore += 8; }
+        if ($filterSalario !== null && $salarioMinRaw !== null && $salarioMinRaw >= $filterSalario) { $filterMatchScore += 6; }
+        if ($searchNeedle !== '' && $searchBlob !== '' && strpos($searchBlob, $searchNeedle) !== false) { $filterMatchScore += 5; }
+        $sortScore = (float)$matchScore + (float)$filterMatchScore;
 
         $vacantes[] = [
 
@@ -1319,17 +1315,23 @@ if ($pdo instanceof PDO) {
 
           'postulado' => isset($appliedVacantes[(int)$row['id']]),
 
-          'filter_modalidad' => $modalidadSlug,
+          'filter_modalidad' => isset($row['modalidad_id']) ? (int)$row['modalidad_id'] : null,
 
-          'filter_contrato' => $contratoSlug,
+          'filter_contrato' => isset($row['tipo_contrato_id']) ? (int)$row['tipo_contrato_id'] : null,
+
+          'filter_nivel' => isset($row['nivel_id']) ? (int)$row['nivel_id'] : null,
+
+          'filter_area' => isset($row['area_id']) ? (int)$row['area_id'] : null,
 
           'filter_ciudad' => $ciudadSlug,
 
+          'filter_currency' => strtoupper((string)($row['moneda'] ?? '')),
+
           'filter_salary' => $salarioMinRaw,
 
-          'filter_experience' => $experienceYears,
-
           'filter_search' => $searchBlob,
+
+          'sort_score' => $sortScore,
 
         ];
 
@@ -1377,8 +1379,6 @@ if ($pdo instanceof PDO) {
         if (!$common) { $common = array_slice($tags, 0, 4); }
         $row['tags_lower'] = $tagsLower;
         $matchScore = dash_match_score($row, $candidateKeywords, $profileData);
-        $modalidadSlug = dash_slugify($row['modalidad_nombre'] ?? '');
-        $contratoSlug = dash_slugify($row['contrato_nombre'] ?? '');
         $ciudadSlug = dash_slugify($row['ciudad'] ?? '');
         $salarioMinRaw = isset($row['salario_min']) ? (int)$row['salario_min'] : null;
         $salarioMaxRaw = isset($row['salario_max']) ? (int)$row['salario_max'] : null;
@@ -1391,10 +1391,16 @@ if ($pdo instanceof PDO) {
           $row['requisitos'] ?? '',
         ]);
         $searchBlob = $searchParts ? dash_lower(implode(' ', $searchParts)) : '';
-        $experienceYears = dash_infer_experience_years(
-          $row['nivel_nombre'] ?? '',
-          ($row['descripcion'] ?? '').' '.($row['requisitos'] ?? '')
-        );
+
+        $filterMatchScore = 0;
+        if ($filterModalidad && in_array((int)($row['modalidad_id'] ?? 0), $filterModalidad, true)) { $filterMatchScore += 12; }
+        if ($filterContrato && in_array((int)($row['tipo_contrato_id'] ?? 0), $filterContrato, true)) { $filterMatchScore += 10; }
+        if ($filterNivel && in_array((int)($row['nivel_id'] ?? 0), $filterNivel, true)) { $filterMatchScore += 10; }
+        if ($filterArea && in_array((int)($row['area_id'] ?? 0), $filterArea, true)) { $filterMatchScore += 10; }
+        if ($filterCurrency !== '' && strtoupper((string)($row['moneda'] ?? '')) === $filterCurrency) { $filterMatchScore += 8; }
+        if ($filterSalario !== null && $salarioMinRaw !== null && $salarioMinRaw >= $filterSalario) { $filterMatchScore += 6; }
+        if ($searchNeedle !== '' && $searchBlob !== '' && strpos($searchBlob, $searchNeedle) !== false) { $filterMatchScore += 5; }
+        $sortScore = (float)$matchScore + (float)$filterMatchScore;
         $vacantesPool[] = [
           'id' => (int)$row['id'],
           'titulo' => $row['titulo'] ?? 'Oferta sin título',
@@ -1408,12 +1414,15 @@ if ($pdo instanceof PDO) {
           'match' => $matchScore,
           'salario' => dash_format_salary($salarioMinRaw, $salarioMaxRaw, (string)($row['moneda'] ?? 'COP')),
           'postulado' => isset($appliedVacantes[(int)$row['id']]),
-          'filter_modalidad' => $modalidadSlug,
-          'filter_contrato' => $contratoSlug,
+          'filter_modalidad' => isset($row['modalidad_id']) ? (int)$row['modalidad_id'] : null,
+          'filter_contrato' => isset($row['tipo_contrato_id']) ? (int)$row['tipo_contrato_id'] : null,
+          'filter_nivel' => isset($row['nivel_id']) ? (int)$row['nivel_id'] : null,
+          'filter_area' => isset($row['area_id']) ? (int)$row['area_id'] : null,
           'filter_ciudad' => $ciudadSlug,
+          'filter_currency' => strtoupper((string)($row['moneda'] ?? '')),
           'filter_salary' => $salarioMinRaw,
-          'filter_experience' => $experienceYears,
           'filter_search' => $searchBlob,
+          'sort_score' => $sortScore,
         ];
       }
     }
@@ -1423,12 +1432,13 @@ if ($pdo instanceof PDO) {
 }
 
 
-$vacantesAll = $vacantes; // estricto
-$vacantes = $vacantes
+$vacantesBase = $vacantes ?: $vacantesPool;
+$vacantesAll = $vacantesBase; // dataset previo a filtros en memoria
+$vacantes = $vacantesBase
 
   ? array_values(array_filter(
 
-      $vacantes,
+      $vacantesBase,
 
       static function (array $vac) use (
 
@@ -1436,27 +1446,53 @@ $vacantes = $vacantes
 
         $filterContrato,
 
+        $filterNivel,
+
+        $filterArea,
+
+        $filterCurrency,
+
         $filterCiudadSlug,
 
         $filterSalario,
-
-        $filterExperiencia,
-
-        $experienceBuckets,
 
         $searchNeedle
 
       ): bool {
 
-        if ($filterModalidad && !in_array($vac['filter_modalidad'] ?? '', $filterModalidad, true)) {
+        if ($filterModalidad && !in_array((int)($vac['filter_modalidad'] ?? 0), $filterModalidad, true)) {
 
           return false;
 
         }
 
-        if ($filterContrato && !in_array($vac['filter_contrato'] ?? '', $filterContrato, true)) {
+        if ($filterContrato && !in_array((int)($vac['filter_contrato'] ?? 0), $filterContrato, true)) {
 
           return false;
+
+        }
+
+        if ($filterNivel && !in_array((int)($vac['filter_nivel'] ?? 0), $filterNivel, true)) {
+
+          return false;
+
+        }
+
+        if ($filterArea && !in_array((int)($vac['filter_area'] ?? 0), $filterArea, true)) {
+
+          return false;
+
+        }
+
+        if ($filterCurrency !== '') {
+
+          $vacCurrency = strtoupper((string)($vac['filter_currency'] ?? ''));
+
+          if ($vacCurrency !== $filterCurrency) {
+
+            return false;
+
+          }
 
         }
 
@@ -1478,38 +1514,6 @@ $vacantes = $vacantes
 
         }
 
-        if ($filterExperiencia !== '') {
-
-          if (!isset($experienceBuckets[$filterExperiencia])) {
-
-            return false;
-
-          }
-
-          $years = $vac['filter_experience'] ?? null;
-
-          if ($years === null) {
-
-            return false;
-
-          }
-
-          [$minExp, $maxExp] = $experienceBuckets[$filterExperiencia];
-
-          if ($minExp !== null && $years < $minExp) {
-
-            return false;
-
-          }
-
-          if ($maxExp !== null && $years > $maxExp) {
-
-            return false;
-
-          }
-
-        }
-
         if ($searchNeedle !== '' && strpos((string)($vac['filter_search'] ?? ''), $searchNeedle) === false) {
 
           return false;
@@ -1524,68 +1528,31 @@ $vacantes = $vacantes
 
   : [];
 
-
-
-// Fallback relacionado cuando no hay resultados estrictos
-if (!$vacantes && (!empty($filterModalidad) || !empty($filterContrato)) && !empty($vacantesPool)) {
-  $modalidadFallbackMap = [
-    'hibrido' => ['hibrido','remoto','presencial'],
-    'remoto' => ['remoto','hibrido'],
-    'presencial' => ['presencial','hibrido'],
-  ];
-  $contratoFallbackMap = [
-    'practicas' => ['practicas','medio-tiempo','tiempo-completo'],
-    'medio-tiempo' => ['medio-tiempo','tiempo-completo'],
-    'tiempo-completo' => ['tiempo-completo','medio-tiempo'],
-    'por-proyecto' => ['por-proyecto','medio-tiempo'],
-  ];
-  $modalidadRelated = [];
-  foreach ($filterModalidad as $m) { $modalidadRelated = array_merge($modalidadRelated, ($modalidadFallbackMap[$m] ?? [$m])); }
-  $modalidadRelated = array_values(array_unique($modalidadRelated));
-  $contratoRelated = [];
-  foreach ($filterContrato as $c) { $contratoRelated = array_merge($contratoRelated, ($contratoFallbackMap[$c] ?? [$c])); }
-  $contratoRelated = array_values(array_unique($contratoRelated));
-  $vacantes = array_values(array_filter(
-    $vacantesPool,
-    static function (array $vac) use (
-      $modalidadRelated,
-      $contratoRelated,
-      $filterCiudadSlug,
-      $filterSalario,
-      $filterExperiencia,
-      $experienceBuckets,
-      $searchNeedle
-    ): bool {
-      if ($modalidadRelated && !in_array($vac['filter_modalidad'] ?? '', $modalidadRelated, true)) { return false; }
-      if ($contratoRelated && !in_array($vac['filter_contrato'] ?? '', $contratoRelated, true)) { return false; }
-      if ($filterCiudadSlug !== '' && strpos((string)($vac['filter_ciudad'] ?? ''), $filterCiudadSlug) === false) { return false; }
-      if ($filterSalario !== null) {
-        $minSalary = $vac['filter_salary'] ?? null;
-        if ($minSalary === null || $minSalary < $filterSalario) { return false; }
+if ($vacantes) {
+  usort(
+    $vacantes,
+    static function (array $a, array $b): int {
+      $scoreA = $a['sort_score'] ?? 0;
+      $scoreB = $b['sort_score'] ?? 0;
+      if ($scoreA === $scoreB) {
+        return ($b['match'] ?? 0) <=> ($a['match'] ?? 0);
       }
-      if ($filterExperiencia !== '') {
-        if (!isset($experienceBuckets[$filterExperiencia])) { return false; }
-        $years = $vac['filter_experience'] ?? null;
-        if ($years === null) { return false; }
-        [$minExp, $maxExp] = $experienceBuckets[$filterExperiencia];
-        if ($minExp !== null && $years < $minExp) { return false; }
-        if ($maxExp !== null && $years > $maxExp) { return false; }
-      }
-      if ($searchNeedle !== '' && strpos((string)($vac['filter_search'] ?? ''), $searchNeedle) === false) { return false; }
-      return true;
+      return $scoreB <=> $scoreA;
     }
-  ));
+  );
 }
+
+
 
 $aiResult = ['items' => [], 'error' => null];
 $vacantesFeed = $vacantes;
-if ($pdo instanceof PDO) {
+if (!$filtersApplied && $pdo instanceof PDO) {
   $aiResult = dash_ai_recommendations($pdo, $profileData, $userSession['email'], $appliedVacantes, 8);
   if (!empty($aiResult['items'])) {
     $vacantesFeed = $aiResult['items'];
   }
 }
-$aiError = $aiResult['error'];
+$aiError = $aiResult['error'] ?? null;
 
 $kpiData = [
 
@@ -1606,6 +1573,48 @@ $skillHighlights = $profileData['skills'] ? array_slice($profileData['skills'], 
 $modalidadLabel = $profileData['modalidad'] ?? null;
 
 $levelLabel = $profileData['level'] ?? null;
+
+// Checklist dinamico del perfil
+$hasSummary = trim((string)($profileData['summary'] ?? '')) !== '';
+$hasSkills = !empty($profileData['skills']);
+$hasCity = !empty($profileData['city']);
+
+if ($pdo instanceof PDO) {
+  try {
+    $cvStmtDash = $pdo->prepare('SELECT id FROM candidato_documentos WHERE LOWER(email) = LOWER(?) AND tipo = "cv" ORDER BY uploaded_at DESC LIMIT 1');
+    $cvStmtDash->execute([$userSession['email']]);
+    $profileData['cv_uploaded'] = (bool)$cvStmtDash->fetchColumn();
+  } catch (Throwable $e) {
+    error_log('[dashboard] cv status: '.$e->getMessage());
+  }
+  try {
+    $certStmt1 = $pdo->prepare('SELECT COUNT(*) FROM candidato_experiencia_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE LOWER(d.email) = LOWER(?)');
+    $certStmt2 = $pdo->prepare('SELECT COUNT(*) FROM candidato_educacion_certificados c JOIN candidato_documentos d ON d.id = c.documento_id WHERE LOWER(d.email) = LOWER(?)');
+    $certTotal = 0;
+    if ($certStmt1 && $certStmt2) {
+      $certStmt1->execute([$userSession['email']]);
+      $certStmt2->execute([$userSession['email']]);
+      $certTotal = (int)$certStmt1->fetchColumn() + (int)$certStmt2->fetchColumn();
+    }
+    $profileData['certifications'] = $certTotal;
+  } catch (Throwable $e) {
+    error_log('[dashboard] cert status: '.$e->getMessage());
+  }
+}
+
+$checkItems = [
+  $profileData['cv_uploaded'],
+  $profileData['email_verified'],
+  $profileData['certifications'] >= 2,
+  $hasSkills,
+  $hasSummary,
+  $hasCity,
+];
+$checkCount = count($checkItems);
+$checkDone = array_sum(array_map(static fn($v) => $v ? 1 : 0, $checkItems));
+$progressPct = $checkCount > 0 ? (int)round(($checkDone / $checkCount) * 100) : 0;
+$progressPct = max(10, min(100, $progressPct));
+$certMissing = max(0, 2 - (int)$profileData['certifications']);
 
 ?>
 
@@ -1691,6 +1700,19 @@ $levelLabel = $profileData['level'] ?? null;
 
   </section>
 
+  <style>
+    .filters .field-head{display:flex;justify-content:space-between;align-items:center;gap:.35rem;}
+    .filters .hint{font-size:.85rem;color:#6b7280;}
+    .filters .pill-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.35rem;margin-top:.25rem;}
+    .filters .pill-grid-tight{grid-template-columns:repeat(auto-fit,minmax(100px,1fr));}
+    .filters .pill-scroll{max-height:220px;overflow-y:auto;padding-right:.25rem;}
+    .filters .pill-check{position:relative;display:flex;align-items:center;}
+    .filters .pill-check input{position:absolute;opacity:0;left:0;top:0;}
+    .filters .pill-check span{display:block;width:100%;text-align:center;border:1px solid #e6e8ed;border-radius:999px;padding:.4rem .6rem;background:#f9fafb;transition:all .15s ease;font-size:.95rem;line-height:1.25;word-break:break-word;white-space:normal;box-sizing:border-box;}
+    .filters .pill-check input:checked + span{background:#e8f5ee;border-color:#2dc26b;color:#0f5132;font-weight:600;box-shadow:0 0 0 1px #2dc26b inset;}
+    .filters .pill-check span:hover{border-color:#d1d5db;}
+  </style>
+
 
 
   <!-- ===== Layout principal ===== -->
@@ -1721,13 +1743,13 @@ $levelLabel = $profileData['level'] ?? null;
 
           <label>Modalidad</label>
 
-          <?php foreach ($modalidadOptions as $slug => $label): ?>
+          <?php foreach ($modalidadOptions as $opt): ?>
 
             <label class="check">
 
-              <input type="checkbox" name="modalidad[]" value="<?=htmlspecialchars($slug, ENT_QUOTES, 'UTF-8'); ?>" <?=in_array($slug, $filterModalidad, true) ? 'checked' : ''; ?> />
+              <input type="checkbox" name="modalidad[]" value="<?= (int)($opt['id'] ?? 0); ?>" <?=in_array((int)($opt['id'] ?? 0), $filterModalidad, true) ? 'checked' : ''; ?> />
 
-              <?=htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
+              <?=htmlspecialchars($opt['nombre'] ?? '', ENT_QUOTES, 'UTF-8'); ?>
 
             </label>
 
@@ -1741,13 +1763,13 @@ $levelLabel = $profileData['level'] ?? null;
 
           <label>Tipo de contrato</label>
 
-          <?php foreach ($contratoOptions as $slug => $label): ?>
+          <?php foreach ($contratoOptions as $opt): ?>
 
             <label class="check">
 
-              <input type="checkbox" name="contrato[]" value="<?=htmlspecialchars($slug, ENT_QUOTES, 'UTF-8'); ?>" <?=in_array($slug, $filterContrato, true) ? 'checked' : ''; ?> />
+              <input type="checkbox" name="contrato[]" value="<?= (int)($opt['id'] ?? 0); ?>" <?=in_array((int)($opt['id'] ?? 0), $filterContrato, true) ? 'checked' : ''; ?> />
 
-              <?=htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
+              <?=htmlspecialchars($opt['nombre'] ?? '', ENT_QUOTES, 'UTF-8'); ?>
 
             </label>
 
@@ -1759,23 +1781,41 @@ $levelLabel = $profileData['level'] ?? null;
 
         <div class="field">
 
-          <label for="experiencia">Años de experiencia</label>
+          <div class="field-head">
+            <label>Nivel</label>
+            <span class="hint">Selecciona uno o varios</span>
+          </div>
 
-          <select id="experiencia" name="experiencia">
-
-            <option value="">Cualquiera</option>
-
-            <?php foreach ($experienceOptions as $value => $label): ?>
-
-              <option value="<?=htmlspecialchars($value, ENT_QUOTES, 'UTF-8'); ?>" <?=$filterExperiencia === $value ? 'selected' : ''; ?>>
-
-                <?=htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
-
-              </option>
-
+          <div class="pill-grid">
+            <?php foreach ($nivelOptions as $opt): ?>
+              <label class="pill-check">
+                <input type="checkbox" name="nivel[]" value="<?= (int)($opt['id'] ?? 0); ?>" <?=in_array((int)($opt['id'] ?? 0), $filterNivel, true) ? 'checked' : ''; ?> />
+                <span><?=htmlspecialchars($opt['nombre'] ?? '', ENT_QUOTES, 'UTF-8'); ?></span>
+              </label>
             <?php endforeach; ?>
+          </div>
 
-          </select>
+        </div>
+
+
+
+        <div class="field">
+
+          <div class="field-head">
+            <label>Area</label>
+            <span class="hint">Puedes elegir varias</span>
+          </div>
+
+          <div class="pill-scroll">
+            <div class="pill-grid">
+              <?php foreach ($areaOptions as $opt): ?>
+                <label class="pill-check">
+                  <input type="checkbox" name="area[]" value="<?= (int)($opt['id'] ?? 0); ?>" <?=in_array((int)($opt['id'] ?? 0), $filterArea, true) ? 'checked' : ''; ?> />
+                  <span><?=htmlspecialchars($opt['nombre'] ?? '', ENT_QUOTES, 'UTF-8'); ?></span>
+                </label>
+              <?php endforeach; ?>
+            </div>
+          </div>
 
         </div>
 
@@ -1786,6 +1826,28 @@ $levelLabel = $profileData['level'] ?? null;
           <label for="salario">Salario objetivo</label>
 
           <input id="salario" name="salario" type="text" placeholder="$2.000.000" value="<?=htmlspecialchars($filterSalarioDisplay, ENT_QUOTES, 'UTF-8'); ?>" />
+
+        </div>
+
+
+
+        <div class="field">
+
+          <label>Moneda</label>
+
+          <div class="pill-grid pill-grid-tight">
+            <label class="pill-check">
+              <input type="radio" name="moneda" value="" <?= $filterCurrency === '' ? 'checked' : ''; ?> />
+              <span>Cualquiera</span>
+            </label>
+            <?php foreach ($currencyOptions as $cur): ?>
+              <?php $curCode = strtoupper((string)$cur); ?>
+              <label class="pill-check">
+                <input type="radio" name="moneda" value="<?=htmlspecialchars($curCode, ENT_QUOTES, 'UTF-8'); ?>" <?= $filterCurrency === $curCode ? 'checked' : ''; ?> />
+                <span><?=htmlspecialchars($curCode, ENT_QUOTES, 'UTF-8'); ?></span>
+              </label>
+            <?php endforeach; ?>
+          </div>
 
         </div>
 
@@ -2061,11 +2123,8 @@ $levelLabel = $profileData['level'] ?? null;
 
 
         <div class="progress">
-
-          <div class="progress-bar"><span style="width:80%"></span></div>
-
-          <div class="progress-label">Perfil 80% completo</div>
-
+          <div class="progress-bar"><span style="width:<?=$progressPct;?>%"></span></div>
+          <div class="progress-label">Perfil <?=$progressPct; ?>% completo</div>
         </div>
 
 
@@ -2117,13 +2176,23 @@ $levelLabel = $profileData['level'] ?? null;
 
 
         <ul class="checklist">
-
-          <li class="ok">CV actualizado</li>
-
-          <li class="ok">Correo verificado</li>
-
-          <li class="warn">Agrega 2 certificaciones</li>
-
+          <li class="<?= $profileData['cv_uploaded'] ? 'ok' : 'warn'; ?>">
+            <?= $profileData['cv_uploaded'] ? 'CV actualizado' : 'Sube tu CV'; ?>
+          </li>
+          <li class="<?= $profileData['email_verified'] ? 'ok' : 'warn'; ?>">
+            <?= $profileData['email_verified'] ? 'Correo verificado' : 'Verifica tu correo'; ?>
+          </li>
+          <li class="<?= $profileData['certifications'] >= 2 ? 'ok' : 'warn'; ?>">
+            <?= $profileData['certifications'] >= 2
+              ? 'Certificaciones ('.$profileData['certifications'].')'
+              : 'Agrega '.($certMissing ?: 1).' certificacion'.(($certMissing ?: 1) === 1 ? '' : 'es'); ?>
+          </li>
+          <li class="<?= $hasSkills ? 'ok' : 'warn'; ?>">
+            <?= $hasSkills ? 'Habilidades registradas ('.count($profileData['skills']).')' : 'Anade habilidades clave'; ?>
+          </li>
+          <li class="<?= $hasSummary ? 'ok' : 'warn'; ?>">
+            <?= $hasSummary ? 'Resumen listo' : 'Completa tu resumen'; ?>
+          </li>
         </ul>
 
 

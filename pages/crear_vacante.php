@@ -296,6 +296,54 @@ $catalogSeeds = [
 
 
 
+if (!function_exists('cv_seed_modalidades_if_missing')) {
+  /**
+   * Garantiza que existan modalidades base y devuelve el catálogo actualizado.
+   * @param array<int,array<string,mixed>> $catalog
+   * @return array<int,array<string,mixed>>
+   */
+  function cv_seed_modalidades_if_missing(PDO $pdo, array $catalog): array
+  {
+    $required = ['Presencial', 'Hibrido', 'Remoto'];
+    $normalize = static function (?string $value): string {
+      $label = cv_fix_catalog_label($value);
+      $ascii = iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $label);
+      $ascii = $ascii !== false ? $ascii : $label;
+      return strtolower(trim((string)$ascii));
+    };
+
+    $existing = [];
+    foreach ($catalog as $row) {
+      $existing[] = $normalize($row['nombre'] ?? '');
+    }
+
+    $missing = [];
+    foreach ($required as $name) {
+      if (!in_array($normalize($name), $existing, true)) {
+        $missing[] = $name;
+      }
+    }
+
+    if ($missing) {
+      try {
+        $stmt = $pdo->prepare('INSERT IGNORE INTO modalidades (nombre) VALUES (:nombre)');
+        foreach ($missing as $name) {
+          $stmt->execute([':nombre' => cv_fix_catalog_label($name)]);
+        }
+        $refresh = $pdo->query('SELECT id, nombre FROM modalidades ORDER BY nombre');
+        if ($refresh) {
+          $catalog = $refresh->fetchAll(PDO::FETCH_ASSOC) ?: $catalog;
+        }
+      } catch (Throwable $e) {
+        error_log('[crear_vacante] seed modalidades: '.$e->getMessage());
+      }
+    }
+
+    return $catalog;
+  }
+}
+
+
 if ($pdo instanceof PDO) {
 
   $catalogTables = [
@@ -326,6 +374,12 @@ if ($pdo instanceof PDO) {
 
       $catalogs[$key] = [];
 
+    }
+
+
+
+    if ($key === 'modalidades' && $pdo instanceof PDO) {
+      $catalogs[$key] = cv_seed_modalidades_if_missing($pdo, $catalogs[$key]);
     }
 
 

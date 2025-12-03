@@ -234,33 +234,37 @@ $perfil['educacion'] = array_values($perfil['educacion']);
 
 ?>
 
-<section class="section container" style="margin-block: var(--sp-4);">
-  <div class="grid" style="grid-template-columns: 1fr 2fr; gap: var(--sp-4);">
-    <aside class="card" style="display:flex; flex-direction:column; gap:var(--sp-3);">
-      <?php $avatarStyle = !empty($perfil['foto']) ? "background-image:url('".pp_e($perfil['foto'])."'); background-size:cover; background-position:center;" : ''; ?>
-      <div class="avatar" aria-hidden="true" style="inline-size:96px; block-size:96px; <?=$avatarStyle?>"></div>
+<section class="section container profile-public">
+  <?php $avatarStyle = !empty($perfil['foto']) ? "background-image:url('".pp_e($perfil['foto'])."'); background-size:cover; background-position:center;" : ''; ?>
+
+  <div class="card hero">
+    <div class="hero-left">
+      <div class="avatar" aria-hidden="true" style="inline-size:104px; block-size:104px; <?=$avatarStyle?>"></div>
       <div>
+        <p class="eyebrow"><?= $perfil['ubicacion'] ? pp_e($perfil['ubicacion']) : 'Ubicación no definida'; ?></p>
         <h1 class="h4 m-0"><?=pp_e($perfil['nombre']); ?></h1>
         <p class="m-0 muted"><?=pp_e($perfil['titulo']); ?></p>
-        <p class="m-0 muted"><?=pp_e($perfil['ubicacion']); ?></p>
+        <?php if ($perfil['skills']): ?>
+          <div class="chips-line">
+            <?php foreach (array_slice($perfil['skills'], 0, 6) as $skill): ?>
+              <span class="chip"><?=pp_e($skill); ?></span>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
       </div>
-      <div>
-        <h2 class="h6 m-0">Competencias</h2>
-        <div class="tags">
-          <?php foreach ($perfil['skills'] as $skill): ?>
-            <span class="chip"><?=pp_e($skill); ?></span>
-          <?php endforeach; ?>
-        </div>
-      </div>
-      <div>
+    </div>
+    <div class="hero-right">
+      <div class="contact-block">
         <h2 class="h6 m-0">Contacto</h2>
-        <ul role="list" style="list-style:none; padding:0; display:grid; gap:.4rem;">
+        <ul role="list">
           <li><a class="link" href="mailto:<?=pp_e($perfil['contacto']['email']); ?>"><?=pp_e($perfil['contacto']['email']); ?></a></li>
-          <li><a class="link" href="tel:<?=pp_e($perfil['contacto']['telefono']); ?>"><?=pp_e($perfil['contacto']['telefono']); ?></a></li>
+          <?php if ($perfil['contacto']['telefono']): ?>
+            <li><a class="link" href="tel:<?=pp_e($perfil['contacto']['telefono']); ?>"><?=pp_e($perfil['contacto']['telefono']); ?></a></li>
+          <?php endif; ?>
           <li><a class="link" href="<?=pp_e($perfil['contacto']['linkedin']); ?>" target="_blank" rel="noopener">LinkedIn</a></li>
         </ul>
       </div>
-      <div class="row-cta" style="justify-content:flex-start; margin-top:auto;">
+      <div class="hero-actions">
         <?php if (!$viewerIsEmpresa): ?>
           <a class="btn btn-secondary" href="index.php?view=editar_perfil">Editar</a>
         <?php endif; ?>
@@ -269,63 +273,85 @@ $perfil['educacion'] = array_values($perfil['educacion']);
         <?php endif; ?>
         <button class="btn btn-primary" type="button">Contactar</button>
       </div>
-    </aside>
+    </div>
+  </div>
 
-    <section style="display:grid; gap:var(--sp-4);">
-      <div class="card">
-        <h2 class="h5">Sobre mi</h2>
-        <p><?=pp_e($perfil['bio']); ?></p>
-      </div>
+  <div class="grid-fit">
+    <div class="card">
+      <h2 class="h5">Sobre mí</h2>
+      <p class="m-0"><?=pp_e($perfil['bio']); ?></p>
+      <?php if ($perfil['skills']): ?>
+        <div class="tags" style="margin-top:.75rem;">
+          <?php foreach ($perfil['skills'] as $skill): ?>
+            <span class="chip"><?=pp_e($skill); ?></span>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
+    </div>
 
-      <div class="card" style="display:grid; gap:var(--sp-3);">
-        <h2 class="h5 m-0">Experiencia</h2>
-        <?php if ($perfil['experiencias']): ?>
-          <div style="display:grid; gap:var(--sp-3);">
-            <?php foreach ($perfil['experiencias'] as $exp): ?>
-              <div class="card" style="padding:var(--sp-3);">
-                <h3 class="h6 m-0">
-                  <?=pp_e($exp['cargo']); ?>
-                  <?php if (!empty($exp['empresa'])): ?> - <?=pp_e($exp['empresa']); ?><?php endif; ?>
-                </h3>
-                <?php $labels = array_filter([
-                  $exp['periodo'] ?? '',
-                  isset($exp['anos_experiencia']) && $exp['anos_experiencia'] !== '' ? ($exp['anos_experiencia'].' años') : null
-                ]); ?>
-                <?php if ($labels): ?><p class="muted m-0"><?=pp_e(implode(' - ', $labels)); ?></p><?php endif; ?>
-                <?php if (!empty($exp['desc'])): ?><p class="m-0"><?=pp_e($exp['desc']); ?></p><?php endif; ?>
-                <?php if (!empty($exp['soporte']['ruta'])): ?>
-                  <p class="m-0"><a class="link" href="<?=pp_e($exp['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
-                <?php endif; ?>
-              </div>
-            <?php endforeach; ?>
+    <div class="card stack">
+      <h2 class="h5 m-0">Experiencia</h2>
+      <?php if ($perfil['experiencias']): ?>
+        <?php foreach ($perfil['experiencias'] as $exp): ?>
+          <div class="card inset">
+            <h3 class="h6 m-0">
+              <?=pp_e($exp['cargo']); ?>
+              <?php if (!empty($exp['empresa'])): ?> - <?=pp_e($exp['empresa']); ?><?php endif; ?>
+            </h3>
+            <?php $labels = array_filter([
+              $exp['periodo'] ?? '',
+              isset($exp['anos_experiencia']) && $exp['anos_experiencia'] !== '' ? ($exp['anos_experiencia'].' años') : null
+            ]); ?>
+            <?php if ($labels): ?><p class="muted m-0"><?=pp_e(implode(' - ', $labels)); ?></p><?php endif; ?>
+            <?php if (!empty($exp['desc'])): ?><p class="m-0"><?=pp_e($exp['desc']); ?></p><?php endif; ?>
+            <?php if (!empty($exp['soporte']['ruta'])): ?>
+              <p class="m-0"><a class="link" href="<?=pp_e($exp['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
+            <?php endif; ?>
           </div>
-        <?php else: ?>
-          <p class="muted m-0">Aun no registras experiencia.</p>
-        <?php endif; ?>
-      </div>
+        <?php endforeach; ?>
+      <?php else: ?>
+        <p class="muted m-0">Aún no registras experiencia.</p>
+      <?php endif; ?>
+    </div>
 
-      <div class="card" style="display:grid; gap:var(--sp-3);">
-        <h2 class="h5 m-0">Educacion</h2>
-        <?php if ($perfil['educacion']): ?>
-          <div style="display:grid; gap:var(--sp-3);">
-            <?php foreach ($perfil['educacion'] as $edu): ?>
-              <div class="card" style="padding:var(--sp-3);">
-                <strong><?=pp_e($edu['titulo']); ?></strong>
-                <?php $eduLabels = array_filter([$edu['institucion'] ?? '', $edu['periodo'] ?? '']); ?>
-                <?php if ($eduLabels): ?><p class="m-0 muted"><?=pp_e(implode(' - ', $eduLabels)); ?></p><?php endif; ?>
-                <?php if (!empty($edu['desc'])): ?><p class="m-0"><?=pp_e($edu['desc']); ?></p><?php endif; ?>
-                <?php if (!empty($edu['soporte']['ruta'])): ?>
-                  <p class="m-0"><a class="link" href="<?=pp_e($edu['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
-                <?php endif; ?>
-              </div>
-            <?php endforeach; ?>
+    <div class="card stack">
+      <h2 class="h5 m-0">Educación</h2>
+      <?php if ($perfil['educacion']): ?>
+        <?php foreach ($perfil['educacion'] as $edu): ?>
+          <div class="card inset">
+            <strong><?=pp_e($edu['titulo']); ?></strong>
+            <?php $eduLabels = array_filter([$edu['institucion'] ?? '', $edu['periodo'] ?? '']); ?>
+            <?php if ($eduLabels): ?><p class="m-0 muted"><?=pp_e(implode(' - ', $eduLabels)); ?></p><?php endif; ?>
+            <?php if (!empty($edu['desc'])): ?><p class="m-0"><?=pp_e($edu['desc']); ?></p><?php endif; ?>
+            <?php if (!empty($edu['soporte']['ruta'])): ?>
+              <p class="m-0"><a class="link" href="<?=pp_e($edu['soporte']['ruta']); ?>" target="_blank" rel="noopener">Ver soporte</a></p>
+            <?php endif; ?>
           </div>
-        <?php else: ?>
-          <p class="muted m-0">Aun no registras estudios.</p>
-        <?php endif; ?>
-      </div>
-    </section>
+        <?php endforeach; ?>
+      <?php else: ?>
+        <p class="muted m-0">Aún no registras estudios.</p>
+      <?php endif; ?>
+    </div>
   </div>
 </section>
+
+<style>
+  .profile-public { display:grid; gap:var(--sp-4); margin-block: var(--sp-4); }
+  .profile-public .hero { display:grid; grid-template-columns:1.8fr 1fr; gap:var(--sp-3); align-items:center; }
+  .profile-public .hero-left { display:flex; gap:var(--sp-3); align-items:center; }
+  .profile-public .hero-right { display:flex; flex-direction:column; align-items:flex-end; justify-content:center; gap:.75rem; }
+  .profile-public .eyebrow { font-size:.9rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted,#6b7280); margin:0; }
+  .profile-public .chips-line { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.35rem; }
+  .profile-public .contact-block ul { list-style:none; padding:0; margin:.35rem 0 0; display:grid; gap:.25rem; }
+  .profile-public .hero-actions { display:flex; gap:.5rem; flex-wrap:wrap; justify-content:flex-end; width:100%; }
+  .profile-public .grid-fit { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:var(--sp-3); }
+  .profile-public .stack { display:flex; flex-direction:column; gap:.75rem; align-items:stretch; }
+  .profile-public .card.inset { padding:var(--sp-3); background:#f8fafc; border:1px solid #e5e7eb; }
+  @media (max-width: 960px) {
+    .profile-public .hero { grid-template-columns:1fr; }
+    .profile-public .hero-right { align-items:flex-start; justify-content:flex-start; }
+    .profile-public .hero-actions { justify-content:flex-start; }
+  }
+</style>
 
 <?php // Fin perfil_publico ?>
