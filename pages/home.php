@@ -62,7 +62,7 @@ if ($pdo instanceof PDO) {
     </div>
     <div class="mock reveal" aria-hidden="true">
       <div class="mock-frame">
-        <img src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1100&q=80" alt="Personas trabajando en equipo" />
+        <img src="assets/landingPage1Sena.webp" alt="Personas trabajando en equipo" />
       </div>
     </div>
   </div>
@@ -171,11 +171,11 @@ if ($pdo instanceof PDO) {
         <a class="btn btn-primary" href="?view=register">Crear cuenta</a>
       </div>
     </div>
-    <div class="cta-img">
-      <img src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=900&q=80" alt="Ilustración de registro" />
+      <div class="cta-img">
+        <img src="assets/cta-business.jpg" alt="Ilustración de registro" />
+      </div>
     </div>
-  </div>
-</section>
+  </section>
 
 <style>
   .hero.compact{padding:48px 0;}
