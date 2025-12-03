@@ -58,9 +58,11 @@ try {
   }
 
   if (empty($config['host'])) { $config['host'] = '127.0.0.1'; }
-  if (empty($config['name'])) { $config['name'] = 'sena_bolsa_empleo'; }
-  if ($config['user'] === null) { $config['user'] = 'root'; }
-  if ($config['pass'] === null) { $config['pass'] = ''; }
+  if (empty($config['port'])) { $config['port'] = 3306; }
+  // Fallback al esquema con datos existentes (ajusta aquí si usas otro nombre)
+  if (empty($config['name'])) { $config['name'] = 'mydb'; }
+  if ($config['user'] === null || $config['user'] === '') { $config['user'] = 'root'; }
+  if ($config['pass'] === null) { $config['pass'] = '1234'; }
 
   if ($config['host'] && $config['name'] && $config['user'] !== null) {
     $dsn = sprintf(

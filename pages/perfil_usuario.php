@@ -104,7 +104,7 @@ if (($pdo instanceof PDO) && $targetEmail) {
       if (!empty($row['telefono'])) { $perfil['contacto']['telefono'] = (string)$row['telefono']; }
 
       $skillsStmt = $pdo->prepare(
-        'SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anos_experiencia DESC, nombre ASC'
+        'SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, años_experiencia) AS anos_experiencia FROM candidato_habilidades WHERE LOWER(email) = LOWER(?) ORDER BY anos_experiencia DESC, nombre ASC'
       );
       $skillsStmt->execute([$targetEmail]);
       $skillRecords = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -127,7 +127,7 @@ if (($pdo instanceof PDO) && $targetEmail) {
     }
 
     $expStmt = $pdo->prepare(
-      'SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC'
+      'SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, años_experiencia) AS anos_experiencia, descripcion FROM candidato_experiencias WHERE LOWER(email) = LOWER(?) ORDER BY orden ASC, created_at ASC'
     );
     $expStmt->execute([$targetEmail]);
     foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
@@ -169,6 +169,7 @@ if (is_array($lastPayload)) {
 unset($_SESSION['last_update_profile']);
 
 $perfil['experiencias'] = array_values(array_filter($perfil['experiencias'], static function (array $exp): bool {
+  // Mostrar aunque falten algunos campos; solo descarta filas totalmente vacías.
   $values = array_map('trim', [
     $exp['cargo'] ?? '', $exp['empresa'] ?? '', $exp['periodo'] ?? '', isset($exp['años']) ? (string)$exp['años'] : '', $exp['desc'] ?? '',
   ]);

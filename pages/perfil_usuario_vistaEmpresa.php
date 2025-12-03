@@ -10,7 +10,9 @@ if (basename($_SERVER['SCRIPT_NAME']) !== 'index.php') {
 if (!function_exists('pp_e')) {
   function pp_e(?string $value): string
   {
-    return htmlspecialchars($value ?? '', ENT_QUOTES, 'UTF-8');
+    $val = $value ?? '';
+    if (function_exists('fix_mojibake')) { $val = fix_mojibake($val); }
+    return htmlspecialchars($val, ENT_QUOTES, 'UTF-8');
   }
 }
 
@@ -33,6 +35,8 @@ if ($targetEmail === '') {
 }
 
 require_once __DIR__.'/db.php';
+// Prefijo de esquema: dejamos vacío y confiamos en la DB activa (DB_NAME en .env)
+$schemaPrefix = '';
 
 $perfil = [
   'nombre'       => '',
@@ -62,22 +66,22 @@ $splitList = static function (?string $value): array {
 if (($pdo instanceof PDO)) {
   try {
     $stmt = $pdo->prepare(
-      'SELECT c.nombres, c.apellidos, c.ciudad, c.telefono,
-              cd.perfil AS resumen, cd.areas_interes, cd.foto_ruta, cd.pais,
+      "SELECT c.nombres, c.apellidos, c.ciudad, c.telefono,
+              cd.perfil AS resumen, cd.areas_interes, cd.foto_ruta, cd.pais, cd.linkedin,
               cp.rol_deseado, cp.habilidades,
               a.nombre AS area_nombre,
               n.nombre AS nivel_nombre,
               m.nombre AS modalidad_nombre,
               d.nombre AS disponibilidad_nombre
-       FROM candidatos c
-       LEFT JOIN candidato_detalles cd ON cd.email = c.email
-       LEFT JOIN candidato_perfil cp ON cp.email = c.email
-       LEFT JOIN areas a ON a.id = cp.area_id
-       LEFT JOIN niveles n ON n.id = cp.nivel_id
-       LEFT JOIN modalidades m ON m.id = cp.modalidad_id
-       LEFT JOIN disponibilidades d ON d.id = cp.disponibilidad_id
-       WHERE c.email = ?
-       LIMIT 1'
+       FROM {$schemaPrefix}candidatos c
+       LEFT JOIN {$schemaPrefix}candidato_detalles cd ON cd.email = c.email
+       LEFT JOIN {$schemaPrefix}candidato_perfil cp ON cp.email = c.email
+       LEFT JOIN {$schemaPrefix}areas a ON a.id = cp.area_id
+       LEFT JOIN {$schemaPrefix}niveles n ON n.id = cp.nivel_id
+       LEFT JOIN {$schemaPrefix}modalidades m ON m.id = cp.modalidad_id
+       LEFT JOIN {$schemaPrefix}disponibilidades d ON d.id = cp.disponibilidad_id
+       WHERE LOWER(c.email) = LOWER(?)
+       LIMIT 1"
     );
     $stmt->execute([$targetEmail]);
     if ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -106,7 +110,10 @@ if (($pdo instanceof PDO)) {
       if (!empty($row['telefono'])) { $perfil['contacto']['telefono'] = (string)$row['telefono']; }
 
       $skillsStmt = $pdo->prepare(
-        'SELECT nombre, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia FROM candidato_habilidades WHERE email = ? ORDER BY anos_experiencia DESC, nombre ASC'
+        "SELECT nombre, COALESCE(anios_experiencia, anos_experiencia) AS anos_experiencia
+         FROM {$schemaPrefix}candidato_habilidades
+         WHERE LOWER(email) = LOWER(?)
+         ORDER BY anos_experiencia DESC, nombre ASC"
       );
       $skillsStmt->execute([$targetEmail]);
       $skillRecords = $skillsStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -117,7 +124,7 @@ if (($pdo instanceof PDO)) {
           $years = $skill['anos_experiencia'];
           if ($years !== null && $years !== '') {
             $yearsFloat = (float)$years; $yearsLabel = rtrim(rtrim(number_format($yearsFloat, 1, '.', ''), '0'), '.');
-            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'anio' : 'años');
+            $skills[] = $name.' - '.$yearsLabel.' '.($yearsFloat === 1.0 ? 'año' : 'años');
           } else { $skills[] = $name; }
         }
         if ($skills) { $perfil['skills'] = array_slice($skills, 0, 10); }
@@ -129,7 +136,10 @@ if (($pdo instanceof PDO)) {
     }
 
     $expStmt = $pdo->prepare(
-      'SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia, a?os_experiencia) AS anos_experiencia, descripcion FROM candidato_experiencias WHERE email = ? ORDER BY orden ASC, created_at ASC'
+      "SELECT cargo, empresa, periodo, COALESCE(anios_experiencia, anos_experiencia) AS anos_experiencia, descripcion
+       FROM {$schemaPrefix}candidato_experiencias
+       WHERE LOWER(email) = LOWER(?)
+       ORDER BY orden ASC, created_at ASC"
     );
     $expStmt->execute([$targetEmail]);
     foreach ($expStmt->fetchAll(PDO::FETCH_ASSOC) as $exp) {
@@ -137,13 +147,16 @@ if (($pdo instanceof PDO)) {
         'cargo'  => $exp['cargo'] ?: 'Experiencia',
         'empresa'=> $exp['empresa'] ?: '',
         'periodo'=> $exp['periodo'] ?: '',
-        'años'  => $exp['anos_experiencia'],
+        'anos_experiencia' => $exp['anos_experiencia'],
         'desc'   => $exp['descripcion'] ?: '',
       ];
     }
 
     $eduStmt = $pdo->prepare(
-      'SELECT titulo, institucion, periodo, descripcion FROM candidato_educacion WHERE email = ? ORDER BY orden ASC, created_at ASC'
+      "SELECT titulo, institucion, periodo, descripcion
+         FROM {$schemaPrefix}candidato_educacion
+        WHERE LOWER(email) = LOWER(?)
+        ORDER BY orden ASC, created_at ASC"
     );
     $eduStmt->execute([$targetEmail]);
     foreach ($eduStmt->fetchAll(PDO::FETCH_ASSOC) as $edu) {
@@ -159,19 +172,9 @@ if (($pdo instanceof PDO)) {
   }
 }
 
-$perfil['experiencias'] = array_values(array_filter($perfil['experiencias'], static function (array $exp): bool {
-  $values = array_map('trim', [
-    $exp['cargo'] ?? '', $exp['empresa'] ?? '', $exp['periodo'] ?? '', isset($exp['años']) ? (string)$exp['años'] : '', $exp['desc'] ?? '',
-  ]);
-  return implode('', $values) !== '';
-}));
-
-$perfil['educacion'] = array_values(array_filter($perfil['educacion'], static function (array $edu): bool {
-  $values = array_map('trim', [
-    $edu['titulo'] ?? '', $edu['institucion'] ?? '', $edu['periodo'] ?? '', $edu['desc'] ?? '',
-  ]);
-  return implode('', $values) !== '';
-}));
+// No filtramos en la vista de empresa; mostramos todo lo disponible.
+$perfil['experiencias'] = array_values($perfil['experiencias']);
+$perfil['educacion'] = array_values($perfil['educacion']);
 
 $flashProfileError = $_SESSION['flash_profile_error'] ?? null;
 $flashProfile = $_SESSION['flash_profile'] ?? null;
@@ -216,7 +219,9 @@ $displayedError = false;
         <ul role="list" style="list-style:none; padding:0; display:grid; gap:.4rem;">
           <li><a class="link" href="mailto:<?=pp_e($perfil['contacto']['email']); ?>"><?=pp_e($perfil['contacto']['email']); ?></a></li>
           <li><a class="link" href="tel:<?=pp_e($perfil['contacto']['telefono']); ?>"><?=pp_e($perfil['contacto']['telefono']); ?></a></li>
-          <li><a class="link" href="#" target="_blank" rel="noopener">LinkedIn</a></li>
+          <?php if (!empty($perfil['contacto']['linkedin'])): ?>
+            <li><a class="link" href="<?=pp_e($perfil['contacto']['linkedin']); ?>" target="_blank" rel="noopener">LinkedIn</a></li>
+          <?php endif; ?>
         </ul>
       </div>
       <div class="row-cta" style="justify-content:flex-start; margin-top:auto;">
@@ -242,7 +247,7 @@ $displayedError = false;
                   <?=pp_e($exp['cargo']); ?>
                   <?php if (!empty($exp['empresa'])): ?> - <?=pp_e($exp['empresa']); ?> <?php endif; ?>
                 </h3>
-                <?php $labels = array_filter([ $exp['periodo'] ?? '', isset($exp['años']) && $exp['años'] !== '' ? ($exp['años'].' años') : null, ]); ?>
+                <?php $labels = array_filter([ $exp['periodo'] ?? '', isset($exp['anos_experiencia']) && $exp['anos_experiencia'] !== '' ? ($exp['anos_experiencia'].' años') : null, ]); ?>
                 <?php if ($labels): ?><p class="muted m-0"><?=pp_e(implode(' - ', $labels)); ?></p><?php endif; ?>
                 <?php if (!empty($exp['desc'])): ?><p class="m-0"><?=pp_e($exp['desc']); ?></p><?php endif; ?>
               </div>
