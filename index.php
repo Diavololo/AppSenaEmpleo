@@ -31,6 +31,7 @@ if (!isset($_SESSION['csrf'])) { $_SESSION['csrf'] = bin2hex(random_bytes(16)); 
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Bolsa de Empleo SENA</title>
+  <link rel="icon" type="image/png" href="assets/logoSena.png" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>

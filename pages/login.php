@@ -53,7 +53,7 @@ if ($flashMessage !== null) {
     <!-- TARJETA: Personas -->
     <div class="tile" aria-label="Iniciar sesión como persona">
       <div class="tile-media">
-        <img src="https://images.unsplash.com/photo-1517423440428-a5a00ad493e8?q=80&w=1600&auto=format&fit=crop" alt="Persona iniciando sesión" />
+        <img src="assets/login-personas.jpg" alt="Personas en reunión de trabajo" />
         <div class="overlay"></div>
       </div>
       <div class="tile-body">
