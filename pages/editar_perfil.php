@@ -374,8 +374,16 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
             <textarea id="perfil" name="perfil" rows="4" required placeholder="Tu experiencia, habilidades y objetivos"><?=ep_e($form['perfil']); ?></textarea>
           </div>
           <div class="field">
-            <label for="areas_interes">Áreas de interés</label>
-            <input id="areas_interes" name="areas_interes" type="text" value="<?=ep_e($form['areas_interes']); ?>" placeholder="Ej: Desarrollo, Administración, Atención al cliente" />
+            <label for="area_input">Áreas de interés</label>
+            <div class="chip-input" id="areas-wrapper">
+              <div id="areas_chips" class="chips"></div>
+              <div style="display:flex; gap:.5rem; margin-top:.35rem;">
+                <input id="area_input" type="text" placeholder="Escribe un área y presiona Enter o Añadir" />
+                <button type="button" class="btn btn-outline" id="area_add_btn">Añadir</button>
+              </div>
+              <small class="muted">Agrega una por una; usaremos estas áreas para recomendarte vacantes.</small>
+              <input id="areas_interes" name="areas_interes" type="hidden" value="<?=ep_e($form['areas_interes']); ?>" />
+            </div>
           </div>
         </div>
         <div class="g-3">
@@ -418,8 +426,8 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
                   <input id="skill_name_<?=$i?>" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL" value="<?=ep_e($skill['nombre']); ?>"/>
                 </div>
                 <div class="field">
-                  <label for="skill_years_<?=$i?>">Años de experiencia</label>
-                  <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=ep_e($skill['años']); ?>"/>
+                  <label for="skill_years_<?=$i?>">Nivel / experiencia</label>
+                  <input id="skill_years_<?=$i?>" name="skill_years[]" type="text" placeholder="Ej: 4 años, Intermedio, Senior" value="<?=ep_e($skill['años']); ?>"/>
                 </div>
                 <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
                   <?php if ($i > 0): ?><button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button><?php endif; ?>
@@ -534,8 +542,8 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
               <input id="skill_name___INDEX__" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL"/>
             </div>
             <div class="field">
-              <label for="skill_years___INDEX__">Años de experiencia</label>
-              <input id="skill_years___INDEX__" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+                <label for="skill_years___INDEX__">Nivel / experiencia</label>
+                <input id="skill_years___INDEX__" name="skill_years[]" type="text" placeholder="Ej: 4 años, Intermedio, Senior"/>
             </div>
             <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
               <button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button>
@@ -692,3 +700,70 @@ if (!$educacion) { $educacion = [['titulo'=>'','institucion'=>'','periodo'=>'','
     </form>
   </div>
 </section>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // Áreas de interés con chips
+  const hidden = document.getElementById('areas_interes');
+  const input = document.getElementById('area_input');
+  const addBtn = document.getElementById('area_add_btn');
+  const chipsBox = document.getElementById('areas_chips');
+  const parseList = (text) => {
+    return Array.from(new Set(
+      (text || '')
+        .split(/[,;\n]+/)
+        .map(t => t.trim())
+        .filter(Boolean)
+    ));
+  };
+  let tags = parseList(hidden ? hidden.value : '');
+
+  function render() {
+    if (!chipsBox) { return; }
+    chipsBox.innerHTML = '';
+    tags.forEach((tag, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = tag;
+      chip.style.margin = '.15rem';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.style.marginLeft = '.35rem';
+      remove.style.border = 'none';
+      remove.style.background = 'transparent';
+      remove.style.cursor = 'pointer';
+      remove.onclick = () => {
+        tags.splice(idx, 1);
+        sync();
+      };
+      chip.appendChild(remove);
+      chipsBox.appendChild(chip);
+    });
+  }
+
+  function sync() {
+    if (hidden) { hidden.value = tags.join(', '); }
+    render();
+  }
+
+  function addTag() {
+    const val = (input?.value || '').trim();
+    if (!val) return;
+    if (!tags.includes(val)) { tags.push(val); }
+    if (input) { input.value = ''; }
+    sync();
+  }
+
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addTag();
+      }
+    });
+  }
+  if (addBtn) { addBtn.addEventListener('click', addTag); }
+  sync();
+});
+</script>

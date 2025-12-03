@@ -61,6 +61,21 @@ if (!function_exists('up_collect_files')) {
   }
 }
 
+if (!function_exists('up_parse_years')) {
+  function up_parse_years($value): ?float {
+    $value = trim((string)$value);
+    if ($value === '') { return null; }
+    if (is_numeric($value)) {
+      return (float)$value;
+    }
+    if (preg_match('/([0-9]+(?:[\\.,][0-9]+)?)/', $value, $m)) {
+      $num = str_replace(',', '.', $m[1]);
+      return is_numeric($num) ? (float)$num : null;
+    }
+    return null;
+  }
+}
+
 if (!function_exists('up_store_upload')) {
   /**
    * @param array{error?:int,tmp_name?:string,name?:string,size?:int} $file
@@ -179,6 +194,11 @@ $pais      = trim((string)($_POST['pais'] ?? ''));
 $direccion = trim((string)($_POST['direccion'] ?? ''));
 $resumen   = trim((string)($_POST['perfil'] ?? ''));
 $areasInteres = trim((string)($_POST['areas_interes'] ?? ''));
+// Normaliza áreas de interés como lista única
+if ($areasInteres !== '') {
+  $areasList = array_filter(array_map(static fn($v) => trim((string)$v), preg_split('/[,;\r\n]+/', $areasInteres)));
+  $areasInteres = implode(', ', array_values(array_unique($areasList)));
+}
 $idiomas   = trim((string)($_POST['idiomas'] ?? ''));
 $competenciasTxt = trim((string)($_POST['competencias'] ?? ''));
 $logrosTxt = trim((string)($_POST['logros'] ?? ''));
@@ -386,7 +406,7 @@ try {
     $name = trim((string)($skillsNames[$i] ?? ''));
     $yearsRaw = trim((string)($skillsYears[$i] ?? ''));
     if ($name === '' && $yearsRaw === '') { continue; }
-    $years = $yearsRaw !== '' ? (float)$yearsRaw : null;
+    $years = $yearsRaw !== '' ? up_parse_years($yearsRaw) : null;
     $skillInsert->execute([
       ':email'  => $newEmail,
       ':nombre' => $name,
@@ -413,12 +433,13 @@ try {
     if ($cargo === '' && $empresa === '' && $periodo === '' && $desc === '' && $anios === '') {
       continue;
     }
+    $aniosParsed = $anios !== '' ? up_parse_years($anios) : null;
     $expInsert->execute([
       ':email'       => $newEmail,
       ':cargo'       => $cargo !== '' ? $cargo : 'Experiencia',
       ':empresa'     => $empresa !== '' ? $empresa : null,
       ':periodo'     => $periodo !== '' ? $periodo : null,
-      ':anios'       => $anios !== '' ? (float)$anios : null,
+      ':anios'       => $aniosParsed,
       ':descripcion' => $desc !== '' ? $desc : null,
       ':orden'       => $order++,
     ]);

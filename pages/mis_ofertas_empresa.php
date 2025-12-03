@@ -377,7 +377,7 @@ unset($_SESSION['flash_mis_ofertas']);
             <input type="text" name="salario" placeholder="$2.000.000" value="<?=$filterSalario ? mo_e(number_format($filterSalario, 0, ',', '.')) : ''; ?>" />
           </label>
           <div class="co-filter-actions">
-            <button type="submit" class="btn btn-primary">Aplicar filtros</button>
+            <button type="submit" class="btn btn-primary btn-important">Aplicar filtros</button>
             <?php if ($filtersApplied): ?>
               <a class="link-edit" href="?view=mis_ofertas_empresa">Limpiar</a>
             <?php endif; ?>
@@ -547,9 +547,54 @@ unset($_SESSION['flash_mis_ofertas']);
             });
           });
           closeBtn.addEventListener('click', closeModal);
-          cancelBtn.addEventListener('click', closeModal);
-        })();
-      </script>
+      cancelBtn.addEventListener('click', closeModal);
+    })();
+  </script>
     </div>
   </div>
+  
+  <style>
+    /* Filtros con estilo verde y bordes suaves */
+    .co-filters.card{
+      background:#ffffff;
+      border-radius:16px;
+      border:1px solid #e6e8ed;
+      box-shadow:0 6px 18px rgba(0,0,0,0.04);
+      padding:18px;
+    }
+    .co-filter-field span,
+    .co-filter-group span{ font-weight:700; color:#1f2937; }
+    .co-filter-form input[type="search"],
+    .co-filter-form input[type="text"],
+    .co-filter-form select{
+      border-radius:12px;
+      border:1px solid #e6e8ed;
+      background:#ffffff;
+      padding-inline:14px;
+    }
+    .co-filter-group .check{
+      display:flex; align-items:center; gap:.55rem;
+      padding:.35rem .55rem;
+      border-radius:12px;
+      transition:background .2s ease,border-color .2s ease;
+      border:1px solid transparent;
+    }
+    .co-filter-group .check:hover{ background:#f5f8fb; border-color:#d5dfe9; }
+    .co-filter-actions .btn.btn-primary{
+      border-radius:12px;
+      background: linear-gradient(90deg, #48b14f, #2f8f36);
+      box-shadow:0 6px 14px rgba(58,142,67,0.18);
+    }
+    .co-tip{ color:#445; }
+    .btn-important{
+      color:#1f9b1f !important;
+      font-weight:700;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+    }
+    .co-filter-actions .btn.btn-primary.btn-important{
+      background:#ffffff;
+      border:1px solid #2f8f36;
+      box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+  </style>
 </section>

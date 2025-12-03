@@ -175,6 +175,7 @@ if (($pdo instanceof PDO) && $targetEmail) {
         'desc'        => $edu['descripcion'] ?: '',
         'soporte'     => $eduCertMap[$eduId] ?? null,
       ];
+    }
   } catch (Throwable $profileError) {
     error_log('[perfil_usuario] '.$profileError->getMessage());
   }

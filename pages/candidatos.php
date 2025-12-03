@@ -663,6 +663,16 @@ $kpis = [ 'total' => 0, 'preseleccion' => 0, 'entrevista' => 0, 'descartados' =>
 
 $includeDescartados = (isset($_GET['include_descartados']) && $_GET['include_descartados'] === '1');
 
+// Filtros de barra lateral
+$filterSearch = trim((string)($_GET['buscar'] ?? ($_GET['q'] ?? '')));
+$filterScoreMin = isset($_GET['score_min']) ? max(0, min(100, (int)$_GET['score_min'])) : 0;
+$rawEstados = $_GET['estado'] ?? [];
+if (!is_array($rawEstados)) { $rawEstados = [$rawEstados]; }
+$rawEstados = array_map(static fn($v) => strtolower(trim((string)$v)), $rawEstados);
+$allowedEstados = ['activo', 'a_revisar', 'entrevista', 'oferta', 'descartado'];
+$filterEstados = array_values(array_intersect($rawEstados, $allowedEstados));
+if (!$filterEstados) { $filterEstados = $allowedEstados; }
+
 $error = null;
 
 
@@ -1055,6 +1065,42 @@ if ($pdo instanceof PDO && !$error && $vacId) {
       $cand['match_score_calc'] = max(0.0, min(100.0, (float)$score * $docFactor));
     }
     unset($cand);
+
+    // Aplica filtros en memoria (buscador, estado, score mínimo)
+    if ($filterSearch !== '' || $filterEstados || $filterScoreMin > 0) {
+      $stateMap = [
+        'activo' => ['', 'recibida', 'activo'],
+        'a_revisar' => ['preseleccion', 'a_revisar', 'revision'],
+        'entrevista' => ['entrevista'],
+        'oferta' => ['oferta', 'contratacion', 'ofertado'],
+        'descartado' => ['no_seleccionado', 'descartado'],
+      ];
+      $candidatos = array_values(array_filter($candidatos, static function ($cand) use ($filterSearch, $filterEstados, $filterScoreMin, $stateMap) {
+        $estado = strtolower((string)($cand['estado'] ?? ''));
+        if ($filterEstados) {
+          $in = false;
+          foreach ($filterEstados as $f) {
+            if (isset($stateMap[$f]) && in_array($estado, $stateMap[$f], true)) { $in = true; break; }
+          }
+          if (!$in) { return false; }
+        }
+        $score = (float)($cand['match_score_calc'] ?? $cand['match_score'] ?? 0);
+        if ($filterScoreMin > 0 && $score < $filterScoreMin) { return false; }
+        if ($filterSearch !== '') {
+          $haystack = strtolower(
+            (string)($cand['nombres'] ?? '').' '.
+            (string)($cand['apellidos'] ?? '').' '.
+            (string)($cand['rol_deseado'] ?? '').' '.
+            (string)($cand['resumen'] ?? '').' '.
+            (string)($cand['habilidades'] ?? '').' '.
+            (string)($cand['ciudad'] ?? '')
+          );
+          if (strpos($haystack, strtolower($filterSearch)) === false) { return false; }
+        }
+        return true;
+      }));
+    }
+
     usort($candidatos, static fn($a, $b) => ($b['match_score_calc'] ?? 0) <=> ($a['match_score_calc'] ?? 0));
   }
 
@@ -1239,72 +1285,54 @@ unset($_SESSION['flash_candidatos']);
       <!-- Sidebar de filtros (reutiliza .filters) -->
 
       <aside class="filters" style="flex:0 0 268px;" aria-label="Filtros de candidatos">
-
-        <div class="card">
-
+        <form class="card" method="get" action="index.php">
+          <input type="hidden" name="view" value="candidatos" />
+          <input type="hidden" name="vacante_id" value="<?=cd_e((string)$vacId); ?>" />
+          <input type="hidden" name="include_descartados" value="<?= $includeDescartados ? '1' : '0'; ?>" />
           <h2 class="card-title">Filtros</h2>
 
-
-
           <div class="field">
-
             <label for="buscar">Buscar</label>
-
-            <input id="buscar" type="text" placeholder="Nombre, rol..." />
-
+            <input id="buscar" name="buscar" type="text" placeholder="Nombre, rol..." value="<?=cd_e($filterSearch); ?>" />
           </div>
 
-
-
           <div class="field">
-
             <label>Estado</label>
-
-            <label class="check"><input type="checkbox" checked /> Activo</label>
-
-            <label class="check"><input type="checkbox" /> A revisar</label>
-
-            <label class="check"><input type="checkbox" /> Entrevista</label>
-
-            <label class="check"><input type="checkbox" /> Oferta</label>
-
-            <label class="check"><input type="checkbox" /> Descartado</label>
-
+            <?php
+              $estadoOptions = [
+                'activo' => 'Activo',
+                'a_revisar' => 'A revisar',
+                'entrevista' => 'Entrevista',
+                'oferta' => 'Oferta',
+                'descartado' => 'Descartado',
+              ];
+            ?>
+            <?php foreach ($estadoOptions as $val => $label): ?>
+              <label class="check">
+                <input type="checkbox" name="estado[]" value="<?=cd_e($val); ?>" <?= in_array($val, $filterEstados, true) ? 'checked' : ''; ?> />
+                <?=cd_e($label); ?>
+              </label>
+            <?php endforeach; ?>
           </div>
-
-
 
           <div class="field">
-
-            <label id="filter-score-label">Score mínimo (IA)</label>
-
-            <div class="progress" role="progressbar" aria-labelledby="filter-score-label" aria-valuenow="60" aria-valuemin="0" aria-valuemax="100" aria-valuetext="60%">
-
-              <div class="progress-bar" style="height:8px;"><span style="width:60%; height:6px;"></span></div>
-
-              <div class="progress-label">60%</div>
-
+            <label for="score-min">Score mínimo (IA)</label>
+            <div class="range-wrap">
+              <input type="range" id="score-min" name="score_min" min="0" max="100" step="5" value="<?=cd_e((string)$filterScoreMin); ?>" />
+              <div class="range-value" id="score-min-value"><?=cd_e((string)$filterScoreMin); ?>%</div>
             </div>
-
           </div>
 
-
-
-          <button class="btn btn-outline full">Aplicar filtros</button>
-
-        </div>
-
-
+          <button class="btn btn-outline full btn-important" type="submit">Aplicar filtros</button>
+        </form>
 
         <div class="card tips">
-
           <h2 class="card-title">Consejo</h2>
-
           <p class="muted">Usa los filtros para descubrir <strong>candidatos con mejor match</strong>.</p>
-
         </div>
-
       </aside>
+
+
 
 
 
@@ -1347,10 +1375,7 @@ unset($_SESSION['flash_candidatos']);
               $calcScore = $cand['match_score_calc'] ?? $cand['match_score'] ?? null;
               $score = $calcScore !== null ? max(0.0, min(100.0, (float)$calcScore)) : 0.0;
 
-              $iaEval = ['resumen' => '', 'datos' => ''];
-              if ($rank <= 3) {
-                $iaEval = cd_ai_eval_candidate($aiClient, $vac ?? [], $cand, (float)$score, $rank);
-              }
+              $iaEval = cd_ai_eval_candidate($aiClient, $vac ?? [], $cand, (float)$score, $rank);
 
               $tags = cd_split_tags($cand['habilidades'] ?? '');
 
@@ -1449,8 +1474,14 @@ unset($_SESSION['flash_candidatos']);
                   <?php
                     $resumenIA = $iaEval['resumen'] ?? '';
                     if ($resumenIA === '') { $resumenIA = $cand['resumen'] ?? ''; }
+                    $resumenId = 'resumen-'.$idx;
                   ?>
-                  <p class="muted" style="margin-top:.35rem;"><?=cd_e($resumenIA); ?></p>
+                  <?php if ($rank > 3): ?>
+                    <button type="button" class="btn btn-outline" data-toggle-resumen="<?=$resumenId; ?>">Generar resumen</button>
+                    <p class="muted" id="<?=$resumenId; ?>" style="margin-top:.35rem; display:none;"><?=cd_e($resumenIA); ?></p>
+                  <?php else: ?>
+                    <p class="muted" style="margin-top:.35rem;"><?=cd_e($resumenIA); ?></p>
+                  <?php endif; ?>
 
                 </div>
 
@@ -1506,7 +1537,7 @@ unset($_SESSION['flash_candidatos']);
 
               <footer class="actions" style="justify-content:flex-start; gap:14px; flex-wrap:wrap;">
 
-                <a class="btn btn-ghost" style="min-height:40px; border-radius:24px;" href="<?= 'index.php?view=perfil_publico&email='.rawurlencode((string)$cand['email']); ?>">Ver perfil</a>
+                <a class="btn btn-ghost btn-important" style="min-height:40px; border-radius:24px;" href="<?= 'index.php?view=perfil_publico&email='.rawurlencode((string)$cand['email']); ?>">Ver perfil</a>
 
                 <form method="post" action="index.php?action=update_postulacion" style="display:inline;">
 
@@ -1518,7 +1549,7 @@ unset($_SESSION['flash_candidatos']);
 
                   <input type="hidden" name="nuevo_estado" value="preseleccion" />
 
-                  <button class="btn btn-outline" style="min-height:40px; border-radius:24px;" type="submit">Mover a preselección</button>
+                  <button class="btn btn-outline btn-important" style="min-height:40px; border-radius:24px;" type="submit">Mover a preselección</button>
 
                 </form>
 
@@ -1532,7 +1563,7 @@ unset($_SESSION['flash_candidatos']);
 
                    <input type="hidden" name="nuevo_estado" value="entrevista" />
 
-                   <button class="btn btn-outline" style="min-height:40px; border-radius:24px;" type="submit">Invitar a entrevista</button>
+                   <button class="btn btn-outline btn-important" style="min-height:40px; border-radius:24px;" type="submit">Invitar a entrevista</button>
 
                  </form>
 
@@ -1600,6 +1631,85 @@ unset($_SESSION['flash_candidatos']);
 
     .progress-label{ color: var(--muted); font-weight:600; }
 
+    .range-wrap{ display:flex; align-items:center; gap:.65rem; }
+
+    .range-wrap input[type="range"]{
+      flex:1;
+      height:12px;
+      appearance:none;
+      background:#eef6e7;
+      border:1px solid #d7e7cf;
+      border-radius:999px;
+      background-image: linear-gradient(90deg, #53b64f, #2f8f36);
+      background-size: var(--val, 50%) 100%;
+      background-repeat:no-repeat;
+      outline:none;
+    }
+    .range-wrap input[type="range"]::-webkit-slider-thumb{
+      appearance:none;
+      width:16px; height:16px; border-radius:50%;
+      background:#2f8f36; border:2px solid #fff;
+      box-shadow:0 2px 6px rgba(0,0,0,0.18);
+    }
+    .range-wrap input[type="range"]::-moz-range-thumb{
+      width:16px; height:16px; border-radius:50%;
+      background:#2f8f36; border:2px solid #fff;
+      box-shadow:0 2px 6px rgba(0,0,0,0.18);
+    }
+
+    .range-value{ min-inline-size:48px; text-align:right; font-weight:700; color: var(--brand-700); }
+
+    /* Texto importante con borde dorado */
+    .btn-important{
+      color:#1f9b1f !important;
+      font-weight:700;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+    }
+    .filters .btn-important{
+      background:#ffffff;
+      border:1px solid #2f8f36;
+      box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+
+    /* Sidebar filtros más suave */
+    aside.filters .card{
+      background:#ffffff;
+      border-radius: 16px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+      border:1px solid #e6e8ed;
+    }
+    aside.filters .field label{ font-weight:700; color:#1f2937; }
+    aside.filters input[type="text"]{
+      border-radius: 12px;
+      border:1px solid #e6e8ed;
+      padding-inline:14px;
+      background:#ffffff;
+    }
+    aside.filters .check{
+      display:flex; align-items:center; gap:.5rem; padding:.25rem .5rem;
+      border-radius:12px;
+      transition:background .2s ease, border-color .2s ease;
+      border:1px solid transparent;
+    }
+    aside.filters .check:hover{ background:#f0f8ea; border-color:#cfe5c4; }
+    aside.filters .btn.full{
+      border-radius:12px;
+      background: linear-gradient(90deg, #48b14f, #2f8f36);
+      color:white;
+      font-weight:700;
+      box-shadow: 0 6px 14px rgba(58,142,67,0.18);
+    }
+    aside.filters .range-wrap input[type="range"]::-webkit-slider-thumb{
+      width:18px; height:18px; border-radius:50%;
+      background:#2f8f36; border:2px solid #fff;
+      box-shadow:0 2px 6px rgba(0,0,0,0.15);
+    }
+    aside.filters .range-wrap input[type="range"]::-moz-range-thumb{
+      width:18px; height:18px; border-radius:50%;
+      background:#2f8f36; border:2px solid #fff;
+      box-shadow:0 2px 6px rgba(0,0,0,0.15);
+    }
+
 
 
     .status{ display:inline-flex; align-items:center; padding:.35rem .7rem; border-radius: var(--pill-radius); font-weight:700; font-size:.85rem; }
@@ -1623,3 +1733,29 @@ unset($_SESSION['flash_candidatos']);
     /* Quita reordenamiento del sidebar en tamaños medianos; mantiene filtros a la izquierda */
 
   </style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('[data-toggle-resumen]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const targetId = btn.getAttribute('data-toggle-resumen');
+      const target = targetId ? document.getElementById(targetId) : null;
+      if (target) {
+        const visible = target.style.display === 'block';
+        target.style.display = visible ? 'none' : 'block';
+      }
+    });
+  });
+
+  const scoreRange = document.getElementById('score-min');
+  const scoreValue = document.getElementById('score-min-value');
+  if (scoreRange && scoreValue) {
+    const updateScore = () => {
+      scoreValue.textContent = `${scoreRange.value}%`;
+      scoreRange.style.setProperty('--val', `${scoreRange.value}%`);
+    };
+    scoreRange.addEventListener('input', updateScore);
+    updateScore();
+  }
+});
+</script>

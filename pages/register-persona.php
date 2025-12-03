@@ -101,6 +101,22 @@ if (!function_exists('rp_collect_files')) {
   }
 }
 
+if (!function_exists('rp_parse_years')) {
+  function rp_parse_years($value): ?float {
+    $value = trim((string)$value);
+    if ($value === '') { return null; }
+    if (is_numeric($value)) {
+      return (float)$value;
+    }
+    // Extrae primer número (entero o decimal) si existe
+    if (preg_match('/([0-9]+(?:[\\.,][0-9]+)?)/', $value, $m)) {
+      $num = str_replace(',', '.', $m[1]);
+      return is_numeric($num) ? (float)$num : null;
+    }
+    return null;
+  }
+}
+
 $rootPath = dirname(__DIR__);
 $uploadsRoot = $rootPath.DIRECTORY_SEPARATOR.'uploads';
 if (!is_dir($uploadsRoot)) {
@@ -276,7 +292,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $ciudad = trim((string)($_POST['ciudad'] ?? ''));
       $direccion = trim((string)($_POST['direccion'] ?? ''));
       $perfil = trim((string)($_POST['perfil'] ?? ''));
-      $areasInteres = trim((string)($_POST['areas_interes'] ?? ''));
+      // Normaliza áreas de interés separadas por coma/Enter; evita entradas corruptas
+      $areasInteresList = [];
+      $areasRaw = $_POST['areas_interes'] ?? '';
+      if (is_string($areasRaw)) {
+        $areasInteresList = array_filter(array_map(static fn($v) => trim((string)$v), preg_split('/[,;\r\n]+/', $areasRaw)));
+        $areasInteresList = array_values(array_unique($areasInteresList));
+      }
+      $areasInteres = implode(', ', $areasInteresList);
       if (strlen($nombre) > 80) { $nombre = substr($nombre, 0, 80); }
       if (strlen($apellido) > 80) { $apellido = substr($apellido, 0, 80); }
       if (strlen($pais) > 80) { $pais = substr($pais, 0, 80); }
@@ -291,15 +314,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       if (is_array($skillNamesRaw) && is_array($skillYearsRaw)) {
         foreach ($skillNamesRaw as $idx => $skillNameRaw) {
           $skillName = trim((string)$skillNameRaw);
-          $skillYears = isset($skillYearsRaw[$idx]) ? (float)$skillYearsRaw[$idx] : null;
+          $skillYears = isset($skillYearsRaw[$idx]) ? trim((string)$skillYearsRaw[$idx]) : '';
           if ($skillName === '') {
             continue;
           }
-          if ($skillYears !== null && $skillYears < 0) {
-            $skillYears = 0.0;
-          } elseif ($skillYears !== null && $skillYears > 60) {
-            $skillYears = 60.0;
-          }
+          $skillYears = rp_parse_years($skillYears);
           $skillsData[] = [
             'nombre' => $skillName,
             'anios'  => $skillYears,
@@ -319,7 +338,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           $role = trim((string)$roleRaw);
           $empresa = is_array($expEmpresas) && array_key_exists($idx, $expEmpresas) ? trim((string)$expEmpresas[$idx]) : '';
           $periodo = is_array($expPeriodos) && array_key_exists($idx, $expPeriodos) ? trim((string)$expPeriodos[$idx]) : '';
-          $anios = is_array($expAnos) && array_key_exists($idx, $expAnos) ? (float)$expAnos[$idx] : null;
+          $anios = is_array($expAnos) && array_key_exists($idx, $expAnos) ? trim((string)$expAnos[$idx]) : '';
           $descripcion = is_array($expDescs) && array_key_exists($idx, $expDescs) ? trim((string)$expDescs[$idx]) : '';
           if ($role === '' && $empresa === '' && $periodo === '' && $descripcion === '') {
             continue;
@@ -327,16 +346,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           if ($role === '') {
             $role = 'Experiencia';
           }
-          if ($anios !== null && $anios < 0) {
-            $anios = 0.0;
-          } elseif ($anios !== null && $anios > 60) {
-            $anios = 60.0;
-          }
           $experienciasData[] = [
             'cargo' => $role,
             'empresa' => $empresa !== '' ? $empresa : null,
             'periodo' => $periodo !== '' ? $periodo : null,
-            'anios' => $anios,
+            'anios' => rp_parse_years($anios),
             'descripcion' => $descripcion !== '' ? $descripcion : null,
             'archivo' => $expArchivos[$idx] ?? null,
           ];
@@ -652,13 +666,24 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
       <h2>Perfil profesional</h2>
       <div class="g-2">
         <div class="field"><label for="perfil">Resumen de perfil *</label><textarea id="perfil" name="perfil" rows="4" maxlength="1200" required placeholder="Tu experiencia, habilidades y objetivos…"><?=htmlspecialchars($_POST['perfil'] ?? '')?></textarea></div>
-        <div class="field"><label for="areas_interes">&Aacute;reas de inter&eacute;s</label><input id="areas_interes" name="areas_interes" type="text" maxlength="160" placeholder="Ej: Desarrollo, Administraci&oacute;n, Atenci&oacute;n al cliente" value="<?=htmlspecialchars($_POST['areas_interes'] ?? '')?>"/></div>
+        <div class="field">
+          <label for="area_input">&Aacute;reas de inter&eacute;s</label>
+          <div class="chip-input" id="areas-wrapper">
+            <div id="areas_chips" class="chips"></div>
+            <div style="display:flex; gap:.5rem; margin-top:.35rem;">
+              <input id="area_input" type="text" maxlength="80" placeholder="Escribe un &aacute;rea y presiona Enter o A&ntilde;adir" />
+              <button type="button" class="btn btn-outline" id="area_add_btn">A&ntilde;adir</button>
+            </div>
+            <small class="muted">Agrega una por una; se guardan como etiquetas (ej. Desarrollo, Dise&ntilde;o instruccional, Calidad).</small>
+            <input id="areas_interes" name="areas_interes" type="hidden" value="<?=htmlspecialchars($_POST['areas_interes'] ?? '')?>" />
+          </div>
+        </div>
       </div>
     </section>
 
     <section>
       <h2>Habilidades y experiencia</h2>
-      <p class="muted">Añade habilidades clave y años de experiencia. Puedes agregar o quitar según necesites.</p>
+      <p class="muted">Añade habilidades clave y su nivel/experiencia. Puedes agregar o quitar según necesites.</p>
       <div id="skill-list" data-collection="skill">
         <?php foreach ($skillFormNames as $i => $val): ?>
           <div class="card skill-item" style="padding:var(--sp-2);margin-block:var(--sp-2);" data-index="<?=$i?>">
@@ -668,8 +693,8 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
                 <input id="skill_name_<?=$i?>" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL" value="<?=htmlspecialchars($skillFormNames[$i] ?? '')?>"/>
               </div>
               <div class="field">
-                <label for="skill_years_<?=$i?>">Años de experiencia</label>
-                <input id="skill_years_<?=$i?>" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
+                <label for="skill_years_<?=$i?>">Nivel / experiencia</label>
+                <input id="skill_years_<?=$i?>" name="skill_years[]" type="text" maxlength="40" placeholder="Ej: 4 años, Intermedio, Senior" value="<?=htmlspecialchars($skillFormYears[$i] ?? '')?>"/>
               </div>
               <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
                 <?php if ($i > 0): ?><button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button><?php endif; ?>
@@ -709,8 +734,8 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
                 <input id="exp_period_<?=$i?>" name="exp_period[]" type="text" placeholder="Ej: 2023-2025" value="<?=htmlspecialchars($expFormPeriodos[$i] ?? '')?>"/>
               </div>
               <div class="field">
-                <label for="exp_years_<?=$i?>">Años de experiencia</label>
-                <input id="exp_years_<?=$i?>" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
+                <label for="exp_years_<?=$i?>">Nivel / experiencia</label>
+                <input id="exp_years_<?=$i?>" name="exp_years[]" type="text" maxlength="40" placeholder="Ej: 2 años, Junior, Liderando" value="<?=htmlspecialchars($expFormAnos[$i] ?? '')?>"/>
               </div>
             </div>
             <div class="field">
@@ -804,8 +829,8 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
             <input id="exp_period___INDEX__" name="exp_period[]" type="text" placeholder="Ej: 2023-2025"/>
           </div>
           <div class="field">
-            <label for="exp_years___INDEX__">Años de experiencia</label>
-            <input id="exp_years___INDEX__" name="exp_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+            <label for="exp_years___INDEX__">Nivel / experiencia</label>
+            <input id="exp_years___INDEX__" name="exp_years[]" type="text" maxlength="40" placeholder="Ej: 2 años, Junior, Liderando"/>
           </div>
         </div>
         <div class="field">
@@ -828,8 +853,8 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
             <input id="skill_name___INDEX__" name="skill_name[]" type="text" placeholder="Ej: Comunicación, Liderazgo, SQL"/>
           </div>
           <div class="field">
-            <label for="skill_years___INDEX__">Años de experiencia</label>
-            <input id="skill_years___INDEX__" name="skill_years[]" type="number" step="0.5" min="0" max="60" placeholder="Ej: 2"/>
+            <label for="skill_years___INDEX__">Nivel / experiencia</label>
+            <input id="skill_years___INDEX__" name="skill_years[]" type="text" maxlength="40" placeholder="Ej: 4 años, Intermedio, Senior"/>
           </div>
           <div class="field" style="display:flex;align-items:center;justify-content:flex-end;">
             <button type="button" class="btn btn-ghost danger" data-remove-row=".skill-item">Eliminar</button>
@@ -878,6 +903,73 @@ if (count($eduFormDescs) < count($eduFormTitulos)) { $eduFormDescs = array_pad($
     </div>
   </form>
 </section>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  // Chips para áreas de interés
+  const hidden = document.getElementById('areas_interes');
+  const input = document.getElementById('area_input');
+  const addBtn = document.getElementById('area_add_btn');
+  const chipsBox = document.getElementById('areas_chips');
+  const parseList = (text) => {
+    return Array.from(new Set(
+      (text || '')
+        .split(/[,;\r\n]+/)
+        .map(t => t.trim())
+        .filter(Boolean)
+    ));
+  };
+  let tags = parseList(hidden ? hidden.value : '');
+
+  function render() {
+    if (!chipsBox) { return; }
+    chipsBox.innerHTML = '';
+    tags.forEach((tag, idx) => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = tag;
+      chip.style.margin = '.15rem';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.style.marginLeft = '.35rem';
+      remove.style.border = 'none';
+      remove.style.background = 'transparent';
+      remove.style.cursor = 'pointer';
+      remove.onclick = () => {
+        tags.splice(idx, 1);
+        sync();
+      };
+      chip.appendChild(remove);
+      chipsBox.appendChild(chip);
+    });
+  }
+
+  function sync() {
+    if (hidden) { hidden.value = tags.join(', '); }
+    render();
+  }
+
+  function addTag() {
+    const val = (input?.value || '').trim();
+    if (!val) return;
+    if (!tags.includes(val)) { tags.push(val); }
+    if (input) { input.value = ''; }
+    sync();
+  }
+
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        addTag();
+      }
+    });
+  }
+  if (addBtn) { addBtn.addEventListener('click', addTag); }
+  sync();
+});
+</script>
 
 
 

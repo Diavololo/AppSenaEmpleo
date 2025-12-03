@@ -11,6 +11,7 @@ if (session_status() === PHP_SESSION_NONE) { session_start(); }
 
 require_once __DIR__.'/db.php';
 require_once dirname(__DIR__).'/lib/EncodingHelper.php';
+require_once dirname(__DIR__).'/lib/DocumentAnalyzer.php';
 
 // Escape seguro con limpieza de mojibake
 if (!function_exists('pp_e')) {
@@ -51,6 +52,15 @@ $perfil = [
   ],
   'foto'         => null,
   'cv'           => null,
+  'doc_evidence' => [
+    'score' => 1.0,
+    'cv_verified' => false,
+    'edu_total' => 0,
+    'edu_verified' => 0,
+    'exp_total' => 0,
+    'exp_verified' => 0,
+    'flags' => [],
+  ],
 ];
 
 $splitList = static function (?string $value): array {
@@ -222,6 +232,17 @@ if ($pdo instanceof PDO) {
         'mime'   => (string)$cvRow['mime'],
       ];
     }
+
+    // Evidencia documental (CV y certificados)
+    // Calcula evidencia documental en background limitado; si falla, no rompe la vista
+    try {
+      $docAnalyzer = new DocumentAnalyzer(null);
+      $perfil['doc_evidence'] = $docAnalyzer->candidateEvidence($pdo, $targetEmail, [
+        'fullName' => $perfil['nombre'] ?? '',
+      ]);
+    } catch (Throwable $e) {
+      error_log('[perfil_publico] doc evidence: '.$e->getMessage());
+    }
   } catch (Throwable $profileError) {
     error_log('[perfil_publico] '.$profileError->getMessage());
   }
@@ -332,6 +353,7 @@ $perfil['educacion'] = array_values($perfil['educacion']);
         <p class="muted m-0">Aún no registras estudios.</p>
       <?php endif; ?>
     </div>
+
   </div>
 </section>
 

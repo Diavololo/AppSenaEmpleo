@@ -1746,6 +1746,60 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
     .filters .pill-check span{display:block;width:100%;text-align:center;border:1px solid #e6e8ed;border-radius:999px;padding:.4rem .6rem;background:#f9fafb;transition:all .15s ease;font-size:.95rem;line-height:1.25;word-break:break-word;white-space:normal;box-sizing:border-box;}
     .filters .pill-check input:checked + span{background:#e8f5ee;border-color:#2dc26b;color:#0f5132;font-weight:600;box-shadow:0 0 0 1px #2dc26b inset;}
     .filters .pill-check span:hover{border-color:#d1d5db;}
+
+    /* Estilo suave para la tarjeta de filtros */
+    .filters .card{
+      background:#ffffff;
+      border-radius:16px;
+      border:1px solid #e6e8ed;
+      box-shadow:0 6px 18px rgba(0,0,0,0.04);
+    }
+    .filters h3{color:#1f2937;}
+    .filters .field label{font-weight:700;color:#1f2937;}
+    .filters input[type="text"], .filters input[type="search"], .filters select{
+      border-radius:12px;
+      border:1px solid #e6e8ed;
+      background:#ffffff;
+      padding-inline:14px;
+    }
+    .filters .check{
+      display:flex; align-items:center; gap:.5rem; padding:.3rem .5rem;
+      border-radius:12px;
+      transition:background .2s ease,border-color .2s ease;
+      border:1px solid transparent;
+    }
+    .filters .check:hover{background:#f5f8fb;border-color:#d5dfe9;}
+    .filters .btn.full{
+      border-radius:12px;
+      background:#ffffff;
+      color:#1f9b1f;
+      border:1px solid #2f8f36;
+      font-weight:700;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+      box-shadow:0 4px 10px rgba(47,143,54,0.12);
+    }
+    .btn-important{
+      color:#1f9b1f !important;
+      font-weight:700;
+      text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+    }
+
+    /* Ajuste de botones en cards de vacantes */
+    .job .row-cta.row-cta-tight{
+      gap:8px;
+      flex-wrap:nowrap;
+      align-items:center;
+    }
+    .job .row-cta.row-cta-tight .btn{
+      padding:0.35rem 0.9rem;
+      min-height:38px;
+      font-size:0.92rem;
+      white-space:nowrap;
+    }
+    .job .row-cta.row-cta-tight .chip{
+      padding:0.35rem 0.9rem;
+      white-space:nowrap;
+    }
   </style>
 
 
@@ -1900,7 +1954,7 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
 
         <div class="field">
 
-          <button type="submit" class="btn btn-outline full">Aplicar filtros</button>
+          <button type="submit" class="btn btn-outline full btn-important">Aplicar filtros</button>
 
           <?php if ($filtersApplied): ?>
 
@@ -2000,9 +2054,6 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
 
             <div class="meta" style="display:flex; flex-wrap:wrap; gap:.45rem; align-items:center;">
               <span><strong><?=htmlspecialchars($vacante['empresa'], ENT_QUOTES, 'UTF-8'); ?></strong> · <?=htmlspecialchars($vacante['meta_line'], ENT_QUOTES, 'UTF-8'); ?></span>
-              <?php if (!empty($vacante['empresa_id'])): ?>
-                <a class="btn btn-ghost" style="padding:0.2rem 0.9rem; font-size:0.85rem;" href="index.php?view=PerfilEmpresaVistaCandidato&empresa_id=<?= (int)$vacante['empresa_id']; ?>">Ver perfil</a>
-              <?php endif; ?>
             </div>
 
 
@@ -2065,7 +2116,10 @@ $certMissing = max(0, 2 - (int)$profileData['certifications']);
 
 
 
-            <div class="row-cta">
+            <div class="row-cta row-cta-tight">
+              <?php if (!empty($vacante['empresa_id'])): ?>
+                <a class="btn btn-ghost" href="index.php?view=PerfilEmpresaVistaCandidato&empresa_id=<?= (int)$vacante['empresa_id']; ?>">Ver Empresa</a>
+              <?php endif; ?>
 
               <a class="btn btn-ghost" href="index.php?view=oferta_detalle&id=<?=$vacante['id']; ?>">Ver detalle</a>
 

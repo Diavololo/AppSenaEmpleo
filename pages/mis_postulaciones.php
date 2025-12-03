@@ -350,7 +350,7 @@ $baseHref = 'index.php';
         </select>
       </div>
       <div class="mp-filter-actions" style="display:flex; gap:.6rem;">
-        <button type="submit" class="btn btn-primary">Aplicar filtros</button>
+        <button type="submit" class="btn btn-primary btn-important">Aplicar filtros</button>
         <?php if ($filtersApplied): ?>
           <a class="link-edit" href="?view=mis_postulaciones">Limpiar</a>
         <?php endif; ?>
@@ -498,4 +498,42 @@ $baseHref = 'index.php';
     </div>
   </aside>
 </section>
+
+<style>
+  /* Filtros con look más dinámico y verde */
+  .mp-filters.card{
+    background:#ffffff;
+    border-radius:16px;
+    border:1px solid #e6e8ed;
+    box-shadow:0 6px 18px rgba(0,0,0,0.04);
+    padding:18px;
+  }
+  .mp-filter-form label,
+  .mp-filter-title{ font-weight:700; color:#1f2937; }
+  .mp-filter-form input[type="search"],
+  .mp-filter-form input[type="text"],
+  .mp-filter-form select{
+    border-radius:12px;
+    border:1px solid #e6e8ed;
+    background:#ffffff;
+    padding-inline:14px;
+  }
+  .mp-filter-check{
+    display:flex; align-items:center; gap:.55rem;
+    padding:.35rem .55rem;
+    border-radius:12px;
+    transition:background .2s ease,border-color .2s ease;
+    border:1px solid transparent;
+  }
+  .mp-filter-check:hover{ background:#f0f8ea; border-color:#cfe5c4; }
+  .mp-filter-actions .btn.btn-primary{
+    border-radius:12px;
+    background:#ffffff;
+    border:1px solid #2f8f36;
+    color:#1f9b1f;
+    text-shadow:-0.4px -0.4px 0 #c58c00, 0.4px 0.4px 0 #c58c00;
+    box-shadow:0 4px 10px rgba(47,143,54,0.12);
+  }
+  .mp-filter-tip{ color:#445; }
+</style>
 </main>
